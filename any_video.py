@@ -32,6 +32,7 @@ import whisper
 # Configuration
 WHISPER_MODELS_DIR = Path.home() / "whisper"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
+YT_DLP_PATH: str | None = None  # Cached path to yt-dlp executable
 GPT_MODEL = "gpt-4.1"  # Model for transcript beautification
 GPT_MODEL_ADVANCED = "gpt-5.2"  # Latest flagship model for summary/quiz generation
 MAX_TRANSCRIPT_CHARS = 100000  # Approximate limit to avoid token overflow
@@ -115,6 +116,41 @@ class DownloadError(Exception):
     pass
 
 
+def get_yt_dlp_path() -> str:
+    """
+    Find the yt-dlp executable, preferring the one in the same directory as Python.
+
+    This ensures yt-dlp is found when running from a virtual environment,
+    even if the venv's bin directory isn't in the system PATH.
+
+    Returns:
+        Path to the yt-dlp executable.
+
+    Raises:
+        DownloadError: If yt-dlp is not found.
+    """
+    global YT_DLP_PATH
+    if YT_DLP_PATH is not None:
+        return YT_DLP_PATH
+
+    import shutil
+
+    # First, check in the same directory as the Python interpreter (venv bin)
+    python_dir = Path(sys.executable).parent
+    venv_yt_dlp = python_dir / "yt-dlp"
+    if venv_yt_dlp.exists():
+        YT_DLP_PATH = str(venv_yt_dlp)
+        return YT_DLP_PATH
+
+    # Fall back to system PATH
+    system_yt_dlp = shutil.which("yt-dlp")
+    if system_yt_dlp:
+        YT_DLP_PATH = system_yt_dlp
+        return YT_DLP_PATH
+
+    raise DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
+
+
 def extract_video_id(url: str) -> str:
     """
     Extract the video ID from a YouTube URL.
@@ -155,9 +191,10 @@ def get_video_title(url: str) -> str:
     Raises:
         DownloadError: If yt-dlp fails to fetch the title.
     """
+    yt_dlp = get_yt_dlp_path()
     try:
         result = subprocess.run(
-            ["yt-dlp", "--get-title", url],
+            [yt_dlp, "--get-title", url],
             capture_output=True,
             text=True,
             check=True,
@@ -168,8 +205,6 @@ def get_video_title(url: str) -> str:
         raise DownloadError(f"Failed to get video title: {e.stderr}") from e
     except subprocess.TimeoutExpired:
         raise DownloadError("Timed out while fetching video title")
-    except FileNotFoundError:
-        raise DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
 
 
 def slugify(text: str, max_length: int = 50) -> str:
@@ -207,10 +242,11 @@ def download_audio(url: str, output_path: Path) -> Path:
     logger.info("Downloading audio...")
     logger.debug(f"Output path: {audio_file}")
 
+    yt_dlp = get_yt_dlp_path()
     try:
         subprocess.run(
             [
-                "yt-dlp",
+                yt_dlp,
                 "-x",
                 "--audio-format",
                 "mp3",
@@ -228,8 +264,6 @@ def download_audio(url: str, output_path: Path) -> Path:
         raise DownloadError(f"Failed to download audio: {e}") from e
     except subprocess.TimeoutExpired:
         raise DownloadError("Download timed out (exceeded 10 minutes)")
-    except FileNotFoundError:
-        raise DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
 
     if not audio_file.exists():
         raise DownloadError("Audio file was not created")
