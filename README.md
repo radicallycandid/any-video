@@ -1,0 +1,118 @@
+# any-video
+
+A YouTube video transcriber that generates AI-powered summaries and quizzes.
+
+## Features
+
+- **Local Transcription**: Uses OpenAI's Whisper model running locally (no API costs for transcription)
+- **AI Summaries**: Generates concise summaries using GPT-4.1
+- **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
+- **Multiple Whisper Models**: Choose between `tiny`, `small`, or `large-v3` based on your accuracy/speed needs
+
+## Requirements
+
+- Python 3.10+
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) for downloading YouTube audio
+- OpenAI API key (for summary and quiz generation)
+- Whisper model files in `~/whisper/`
+
+## Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/any-video.git
+   cd any-video
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -e .
+   ```
+
+   Or with development dependencies:
+   ```bash
+   pip install -e ".[dev]"
+   ```
+
+3. Download Whisper models to `~/whisper/`:
+   ```bash
+   mkdir -p ~/whisper
+   # Models will be downloaded automatically on first use, or you can pre-download them
+   ```
+
+4. Set your OpenAI API key:
+   ```bash
+   export OPENAI_API_KEY='your-key-here'
+   ```
+
+## Usage
+
+Basic usage:
+```bash
+python any_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+With options:
+```bash
+# Use a larger model for better accuracy
+python any_video.py "https://youtu.be/VIDEO_ID" --model large-v3
+
+# Specify a custom output directory
+python any_video.py "https://youtube.com/shorts/VIDEO_ID" --output-dir ./my-results
+```
+
+### Command-Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | YouTube video URL (required) | - |
+| `--model` | Whisper model: `tiny`, `small`, `large-v3` | `small` |
+| `--output-dir` | Output directory for generated files | `./output` |
+
+### Supported URL Formats
+
+- Standard: `https://www.youtube.com/watch?v=VIDEO_ID`
+- Shortened: `https://youtu.be/VIDEO_ID`
+- Embeds: `https://www.youtube.com/embed/VIDEO_ID`
+- Shorts: `https://youtube.com/shorts/VIDEO_ID`
+
+## Output
+
+For each video, the tool creates a folder with three markdown files:
+
+```
+output/
+└── VIDEO_ID_video-title-slug/
+    ├── transcript.md   # Full video transcript
+    ├── summary.md      # AI-generated summary
+    └── quiz.md         # 10 multiple-choice questions
+```
+
+## Whisper Models
+
+| Model | Size | Speed | Accuracy |
+|-------|------|-------|----------|
+| `tiny` | 75 MB | Fastest | Good for simple content |
+| `small` | 483 MB | Balanced | Good for most videos |
+| `large-v3` | 3 GB | Slowest | Best accuracy |
+
+## Development
+
+Run tests:
+```bash
+pytest
+```
+
+Format code:
+```bash
+black any_video.py
+```
+
+Lint:
+```bash
+ruff check any_video.py
+```
+
+## License
+
+MIT
