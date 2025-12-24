@@ -445,14 +445,24 @@ def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, s
             client,
             [
                 {
+                    "role": "system",
+                    "content": """You are an expert content summarizer. Your summaries should be direct and opinionated, capturing the actual claims, arguments, and opinions expressed in the content.
+
+Key guidelines:
+- Use direct, assertive language: "X argues that..." or "X states that..." rather than "X reflects on..." or "X discusses..."
+- Capture the speaker's actual positions and opinions, not just topics covered
+- Include specific claims, arguments, and conclusions made by the speaker
+- Present the substance of what was said, not a meta-description of the video
+- Be concise but substantive - every sentence should convey meaningful content
+- If the speaker expresses strong opinions or makes bold claims, include them directly""",
+                },
+                {
                     "role": "user",
-                    "content": f"""Please provide a concise summary of the following video transcript.
-The video is titled: "{video_title}"
+                    "content": f"""Summarize the key points, arguments, and opinions from this video transcript.
+Video title: "{video_title}"
 
 Transcript:
-{transcript_for_api}
-
-Write a clear, well-structured summary that captures the main points and key takeaways.""",
+{transcript_for_api}""",
                 }
             ],
             max_tokens=1024,
@@ -465,9 +475,26 @@ Write a clear, well-structured summary that captures the main points and key tak
             client,
             [
                 {
+                    "role": "system",
+                    "content": """You are an expert quiz creator. Create high-quality multiple choice questions that genuinely test comprehension.
+
+Critical requirements for answer options:
+1. ALL four options (A, B, C, D) must be similar in length, tone, and level of detail
+2. Wrong answers must sound equally plausible and professional as the correct answer
+3. Avoid making the correct answer longer, more detailed, or more "polished" than wrong answers
+4. Distribute correct answers roughly evenly across A, B, C, and D (not clustering on any letter)
+
+Question quality guidelines:
+- Target MEDIUM difficulty - not trivially obvious, but answerable if one paid attention
+- Questions should require actual comprehension, not just keyword matching
+- Wrong answers should be reasonable interpretations that someone might believe if they misunderstood
+- Avoid "all of the above" or "none of the above" options
+- Each question should test a distinct concept or claim from the content""",
+                },
+                {
                     "role": "user",
-                    "content": f"""Based on the following video transcript, create a 10-question multiple choice quiz.
-The video is titled: "{video_title}"
+                    "content": f"""Create a 10-question multiple choice quiz based on this video transcript.
+Video title: "{video_title}"
 
 Transcript:
 {transcript_for_api}
@@ -475,25 +502,21 @@ Transcript:
 Format each question exactly like this:
 
 ## Question 1
-What is the main topic discussed in the video?
+[Question text]
 
-- A) Option A
-- B) Option B
-- C) Option C
-- D) Option D
+- A) [Option - similar length and tone to others]
+- B) [Option - similar length and tone to others]
+- C) [Option - similar length and tone to others]
+- D) [Option - similar length and tone to others]
 
-**Correct Answer: A**
+**Correct Answer: [Letter]**
 
 ---
 
-Make sure:
-- Questions test comprehension of the key concepts
-- All 4 options are plausible
-- Include the correct answer after each question
-- Separate questions with ---""",
+Remember: Vary which letter is correct across questions, and ensure all options look equally plausible.""",
                 }
             ],
-            max_tokens=2048,
+            max_tokens=3000,
             model=GPT_MODEL_ADVANCED,
         )
 
