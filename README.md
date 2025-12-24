@@ -15,6 +15,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 ## Requirements
 
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - **ffmpeg** (required for audio processing)
 - OpenAI API key (for summary, quiz, and transcript beautification)
 
@@ -36,48 +37,36 @@ winget install ffmpeg
 # Or download from https://ffmpeg.org/download.html
 ```
 
-## Installation
+## Quick Start
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/radicallycandid/any-video.git
-   cd any-video
-   ```
+```bash
+# Clone and enter the repo
+git clone https://github.com/radicallycandid/any-video.git
+cd any-video
 
-2. Install dependencies:
-   ```bash
-   pip install -e .
-   ```
+# Set your OpenAI API key
+export OPENAI_API_KEY='your-key-here'
 
-   **Using [uv](https://docs.astral.sh/uv/) (recommended for faster installs):**
-   ```bash
-   uv pip install -e .
-   ```
+# Run it (uv handles everything automatically)
+uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID"
+```
 
-   Or with development dependencies:
-   ```bash
-   pip install -e ".[dev]"
-   ```
-
-3. Set your OpenAI API key:
-   ```bash
-   export OPENAI_API_KEY='your-key-here'
-   ```
+That's it. No manual venv creation, no `pip install` - `uv run` does it all.
 
 ## Usage
 
-Basic usage:
 ```bash
-python any_video.py "https://www.youtube.com/watch?v=VIDEO_ID"
-```
+# Basic usage
+uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID"
 
-With options:
-```bash
 # Use a larger model for better accuracy
-python any_video.py "https://youtu.be/VIDEO_ID" --model large-v3
+uv run any-video "https://youtu.be/VIDEO_ID" --model large-v3
 
 # Specify a custom output directory
-python any_video.py "https://youtube.com/shorts/VIDEO_ID" --output-dir ./my-results
+uv run any-video "https://youtube.com/shorts/VIDEO_ID" --output-dir ./my-results
+
+# Verbose mode for debugging
+uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID" -v
 ```
 
 ### Command-Line Options
@@ -121,29 +110,24 @@ Whisper models are downloaded automatically on first use to `~/whisper/`. The in
 
 ## Development
 
-Install dev dependencies:
+```bash
+# Run tests
+uv run pytest
+
+# Lint
+uv run ruff check .
+
+# Format
+uv run ruff format .
+```
+
+### Alternative: pip installation
+
+If you prefer not to use `uv`:
+
 ```bash
 pip install -e ".[dev]"
-```
-
-Run tests:
-```bash
-pytest
-```
-
-Run tests with coverage:
-```bash
-pytest -v
-```
-
-Format code:
-```bash
-black any_video.py tests/
-```
-
-Lint:
-```bash
-ruff check any_video.py tests/
+any-video "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
 ## License
