@@ -16,11 +16,15 @@ Examples:
 """
 
 import argparse
+import logging
 import os
 import re
 import subprocess
 import sys
+import time
+from functools import wraps
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import openai
 import whisper
@@ -30,6 +34,66 @@ WHISPER_MODELS_DIR = Path.home() / "whisper"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
 GPT_MODEL = "gpt-4.1"
 MAX_TRANSCRIPT_CHARS = 100000  # Approximate limit to avoid token overflow
+
+# Retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0  # Base delay in seconds (will be multiplied for exponential backoff)
+
+# Set up logging
+logger = logging.getLogger("any-video")
+
+T = TypeVar("T")
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging for the application."""
+    level = logging.DEBUG if verbose else logging.INFO
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(level)
+
+
+def retry_with_backoff(
+    max_retries: int = MAX_RETRIES,
+    base_delay: float = RETRY_DELAY,
+    exceptions: tuple = (Exception,),
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """
+    Decorator that retries a function with exponential backoff.
+
+    Args:
+        max_retries: Maximum number of retry attempts.
+        base_delay: Base delay between retries (doubles each attempt).
+        exceptions: Tuple of exception types to catch and retry.
+
+    Returns:
+        Decorated function with retry logic.
+    """
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_exception = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        delay = base_delay * (2**attempt)
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"All {max_retries + 1} attempts failed.")
+            raise last_exception
+
+        return wrapper
+
+    return decorator
 
 
 class TranscriptionError(Exception):
@@ -139,6 +203,9 @@ def download_audio(url: str, output_path: Path) -> Path:
         DownloadError: If the download fails.
     """
     audio_file = output_path / "audio.mp3"
+    logger.info("Downloading audio...")
+    logger.debug(f"Output path: {audio_file}")
+
     try:
         subprocess.run(
             [
@@ -150,15 +217,14 @@ def download_audio(url: str, output_path: Path) -> Path:
                 "0",
                 "-o",
                 str(audio_file),
+                "--progress",
                 url,
             ],
             check=True,
-            capture_output=True,
-            text=True,
             timeout=600,  # 10 minute timeout for long videos
         )
     except subprocess.CalledProcessError as e:
-        raise DownloadError(f"Failed to download audio: {e.stderr}") from e
+        raise DownloadError(f"Failed to download audio: {e}") from e
     except subprocess.TimeoutExpired:
         raise DownloadError("Download timed out (exceeded 10 minutes)")
     except FileNotFoundError:
@@ -167,6 +233,7 @@ def download_audio(url: str, output_path: Path) -> Path:
     if not audio_file.exists():
         raise DownloadError("Audio file was not created")
 
+    logger.debug(f"Downloaded: {audio_file} ({audio_file.stat().st_size / 1024 / 1024:.1f} MB)")
     return audio_file
 
 
@@ -196,11 +263,12 @@ def transcribe_audio(audio_path: Path, model_name: str) -> str:
         )
 
     try:
-        print(f"Loading Whisper model: {model_name}...")
+        logger.info(f"Loading Whisper model: {model_name}...")
         model = whisper.load_model(model_name, download_root=str(WHISPER_MODELS_DIR))
 
-        print("Transcribing audio...")
-        result = model.transcribe(str(audio_path))
+        logger.info("Transcribing audio (this may take a while)...")
+        result = model.transcribe(str(audio_path), verbose=False)
+        logger.info("Transcription complete.")
         return result["text"]
     except Exception as e:
         raise TranscriptionError(f"Transcription failed: {e}") from e
@@ -229,6 +297,31 @@ def truncate_transcript(transcript: str, max_chars: int = MAX_TRANSCRIPT_CHARS) 
     return truncated, True
 
 
+@retry_with_backoff(
+    max_retries=MAX_RETRIES,
+    base_delay=RETRY_DELAY,
+    exceptions=(openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError),
+)
+def _call_openai_api(client: openai.OpenAI, messages: list, max_tokens: int) -> str:
+    """
+    Make an OpenAI API call with retry logic.
+
+    Args:
+        client: OpenAI client instance.
+        messages: List of message dicts for the chat completion.
+        max_tokens: Maximum tokens in the response.
+
+    Returns:
+        The response content as a string.
+    """
+    response = client.chat.completions.create(
+        model=GPT_MODEL,
+        max_tokens=max_tokens,
+        messages=messages,
+    )
+    return response.choices[0].message.content
+
+
 def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, str]:
     """
     Generate summary and quiz using OpenAI API.
@@ -253,18 +346,19 @@ def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, s
     # Truncate transcript if needed
     transcript_for_api, was_truncated = truncate_transcript(transcript)
     if was_truncated:
-        print(f"Note: Transcript was truncated from {len(transcript):,} to "
-              f"{len(transcript_for_api):,} characters to fit API limits.")
+        logger.warning(
+            f"Transcript was truncated from {len(transcript):,} to "
+            f"{len(transcript_for_api):,} characters to fit API limits."
+        )
 
     try:
         client = openai.OpenAI()
 
         # Generate summary
-        print("Generating summary...")
-        summary_response = client.chat.completions.create(
-            model=GPT_MODEL,
-            max_tokens=1024,
-            messages=[
+        logger.info("Generating summary...")
+        summary = _call_openai_api(
+            client,
+            [
                 {
                     "role": "user",
                     "content": f"""Please provide a concise summary of the following video transcript.
@@ -276,15 +370,14 @@ Transcript:
 Write a clear, well-structured summary that captures the main points and key takeaways.""",
                 }
             ],
+            max_tokens=1024,
         )
-        summary = summary_response.choices[0].message.content
 
         # Generate quiz
-        print("Generating quiz...")
-        quiz_response = client.chat.completions.create(
-            model=GPT_MODEL,
-            max_tokens=2048,
-            messages=[
+        logger.info("Generating quiz...")
+        quiz = _call_openai_api(
+            client,
+            [
                 {
                     "role": "user",
                     "content": f"""Based on the following video transcript, create a 10-question multiple choice quiz.
@@ -314,17 +407,21 @@ Make sure:
 - Separate questions with ---""",
                 }
             ],
+            max_tokens=2048,
         )
-        quiz = quiz_response.choices[0].message.content
 
         return summary, quiz
 
     except openai.AuthenticationError:
         raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
     except openai.RateLimitError:
-        raise APIError("OpenAI API rate limit exceeded. Please try again later.")
+        raise APIError(
+            "OpenAI API rate limit exceeded after multiple retries. Please try again later."
+        )
     except openai.APIConnectionError:
-        raise APIError("Failed to connect to OpenAI API. Check your internet connection.")
+        raise APIError(
+            "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
+        )
     except openai.APIError as e:
         raise APIError(f"OpenAI API error: {e}") from e
 
@@ -354,29 +451,37 @@ Examples:
         default=DEFAULT_OUTPUT_DIR,
         help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output with debug information",
+    )
     args = parser.parse_args()
+
+    # Set up logging
+    setup_logging(verbose=args.verbose)
 
     try:
         # Check for API key early
         if not os.environ.get("OPENAI_API_KEY"):
-            print("Error: OPENAI_API_KEY environment variable not set.")
-            print("Export it with: export OPENAI_API_KEY='your-key-here'")
+            logger.error("OPENAI_API_KEY environment variable not set.")
+            logger.error("Export it with: export OPENAI_API_KEY='your-key-here'")
             sys.exit(1)
 
         # Extract video info
-        print(f"Processing: {args.url}")
+        logger.info(f"Processing: {args.url}")
         video_id = extract_video_id(args.url)
         video_title = get_video_title(args.url)
-        print(f"Video: {video_title}")
+        logger.info(f"Video: {video_title}")
 
         # Create output directory
         folder_name = f"{video_id}_{slugify(video_title)}"
         output_path = args.output_dir / folder_name
         output_path.mkdir(parents=True, exist_ok=True)
-        print(f"Output folder: {output_path}")
+        logger.info(f"Output folder: {output_path}")
 
         # Download audio
-        print("Downloading audio...")
         audio_file = download_audio(args.url, output_path)
 
         # Transcribe
@@ -385,7 +490,7 @@ Examples:
         # Save transcript
         transcript_file = output_path / "transcript.md"
         transcript_file.write_text(f"# Transcript: {video_title}\n\n{transcript}\n")
-        print(f"Saved: {transcript_file}")
+        logger.info(f"Saved: {transcript_file}")
 
         # Generate summary and quiz
         summary, quiz = generate_summary_and_quiz(transcript, video_title)
@@ -393,32 +498,33 @@ Examples:
         # Save summary
         summary_file = output_path / "summary.md"
         summary_file.write_text(f"# Summary: {video_title}\n\n{summary}\n")
-        print(f"Saved: {summary_file}")
+        logger.info(f"Saved: {summary_file}")
 
         # Save quiz
         quiz_file = output_path / "quiz.md"
         quiz_file.write_text(f"# Quiz: {video_title}\n\n{quiz}\n")
-        print(f"Saved: {quiz_file}")
+        logger.info(f"Saved: {quiz_file}")
 
         # Clean up audio file
         audio_file.unlink()
+        logger.debug("Cleaned up temporary audio file")
 
-        print(f"\nDone! Files saved to: {output_path}")
+        logger.info(f"\nDone! Files saved to: {output_path}")
 
     except ValueError as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         sys.exit(1)
     except DownloadError as e:
-        print(f"Download error: {e}")
+        logger.error(f"Download error: {e}")
         sys.exit(1)
     except TranscriptionError as e:
-        print(f"Transcription error: {e}")
+        logger.error(f"Transcription error: {e}")
         sys.exit(1)
     except APIError as e:
-        print(f"API error: {e}")
+        logger.error(f"API error: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user.")
+        logger.warning("\nOperation cancelled by user.")
         sys.exit(130)
 
 

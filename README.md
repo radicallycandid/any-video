@@ -8,6 +8,8 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 - **AI Summaries**: Generates concise summaries using GPT-4.1
 - **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
 - **Multiple Whisper Models**: Choose between `tiny`, `small`, or `large-v3` based on your accuracy/speed needs
+- **Robust Error Handling**: Automatic retries with exponential backoff for API failures
+- **Verbose Mode**: Debug logging with `-v` flag for troubleshooting
 
 ## Requirements
 
@@ -68,6 +70,7 @@ python any_video.py "https://youtube.com/shorts/VIDEO_ID" --output-dir ./my-resu
 | `url` | YouTube video URL (required) | - |
 | `--model` | Whisper model: `tiny`, `small`, `large-v3` | `small` |
 | `--output-dir` | Output directory for generated files | `./output` |
+| `-v, --verbose` | Enable debug output | off |
 
 ### Supported URL Formats
 
@@ -98,19 +101,29 @@ output/
 
 ## Development
 
+Install dev dependencies:
+```bash
+pip install -e ".[dev]"
+```
+
 Run tests:
 ```bash
 pytest
 ```
 
+Run tests with coverage:
+```bash
+pytest -v
+```
+
 Format code:
 ```bash
-black any_video.py
+black any_video.py tests/
 ```
 
 Lint:
 ```bash
-ruff check any_video.py
+ruff check any_video.py tests/
 ```
 
 ## License
