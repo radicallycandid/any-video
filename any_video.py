@@ -33,7 +33,7 @@ import whisper
 WHISPER_MODELS_DIR = Path.home() / "whisper"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
 GPT_MODEL = "gpt-4.1-mini"  # Cost-effective model for beautification
-GPT_MODEL_ADVANCED = "gpt-4.1"  # More capable model for summary/quiz generation
+GPT_MODEL_ADVANCED = "gpt-5.2"  # Latest flagship model for summary/quiz generation
 MAX_TRANSCRIPT_CHARS = 100000  # Approximate limit to avoid token overflow
 
 # Retry configuration

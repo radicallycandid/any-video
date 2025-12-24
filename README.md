@@ -6,7 +6,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 
 - **Local Transcription**: Uses OpenAI's Whisper model running locally (no API costs for transcription)
 - **Transcript Beautification**: AI-powered cleanup of raw transcripts - fixes typos, corrects proper nouns, adds paragraph breaks
-- **AI Summaries**: Generates concise summaries using GPT-4.1
+- **AI Summaries**: Generates concise summaries using GPT-5.2
 - **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
 - **Multiple Whisper Models**: Choose between `tiny`, `small`, or `large-v3` based on your accuracy/speed needs
 - **Robust Error Handling**: Automatic retries with exponential backoff for API failures
