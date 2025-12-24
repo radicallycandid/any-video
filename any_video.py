@@ -32,7 +32,8 @@ import whisper
 # Configuration
 WHISPER_MODELS_DIR = Path.home() / "whisper"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
-GPT_MODEL = "gpt-4.1"
+GPT_MODEL = "gpt-4.1-mini"  # Cost-effective model for beautification
+GPT_MODEL_ADVANCED = "gpt-4.1"  # More capable model for summary/quiz generation
 MAX_TRANSCRIPT_CHARS = 100000  # Approximate limit to avoid token overflow
 
 # Retry configuration
@@ -302,7 +303,9 @@ def truncate_transcript(transcript: str, max_chars: int = MAX_TRANSCRIPT_CHARS) 
     base_delay=RETRY_DELAY,
     exceptions=(openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError),
 )
-def _call_openai_api(client: openai.OpenAI, messages: list, max_tokens: int) -> str:
+def _call_openai_api(
+    client: openai.OpenAI, messages: list, max_tokens: int, model: str | None = None
+) -> str:
     """
     Make an OpenAI API call with retry logic.
 
@@ -310,16 +313,98 @@ def _call_openai_api(client: openai.OpenAI, messages: list, max_tokens: int) -> 
         client: OpenAI client instance.
         messages: List of message dicts for the chat completion.
         max_tokens: Maximum tokens in the response.
+        model: Optional model override. Defaults to GPT_MODEL.
 
     Returns:
         The response content as a string.
     """
     response = client.chat.completions.create(
-        model=GPT_MODEL,
+        model=model or GPT_MODEL,
         max_tokens=max_tokens,
         messages=messages,
     )
     return response.choices[0].message.content
+
+
+def beautify_transcript(raw_transcript: str, video_title: str) -> str:
+    """
+    Clean up and format raw Whisper transcript using an LLM.
+
+    Fixes common transcription errors, corrects proper nouns based on context,
+    adds paragraph breaks, and improves overall readability.
+
+    Args:
+        raw_transcript: The raw transcript from Whisper.
+        video_title: The video title for context.
+
+    Returns:
+        The beautified transcript text.
+
+    Raises:
+        APIError: If the API call fails.
+    """
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise APIError(
+            "OPENAI_API_KEY environment variable not set. "
+            "Export it with: export OPENAI_API_KEY='your-key-here'"
+        )
+
+    # For very long transcripts, we need to process in chunks
+    transcript_for_api, was_truncated = truncate_transcript(raw_transcript)
+    if was_truncated:
+        logger.warning(
+            f"Transcript was truncated from {len(raw_transcript):,} to "
+            f"{len(transcript_for_api):,} characters for beautification."
+        )
+
+    try:
+        client = openai.OpenAI()
+
+        logger.info("Beautifying transcript...")
+        beautified = _call_openai_api(
+            client,
+            [
+                {
+                    "role": "system",
+                    "content": """You are an expert transcript editor. Your job is to clean up raw speech-to-text transcripts while preserving the original meaning exactly.
+
+Your tasks:
+1. Fix obvious transcription errors and typos
+2. Correct proper nouns (people's names, company names, technical terms) based on context
+3. Add appropriate paragraph breaks for readability (every 3-5 sentences or at topic changes)
+4. Fix punctuation and capitalization
+5. Remove filler words like "um", "uh", "you know" (but keep natural speech patterns)
+6. Do NOT add, remove, or change the actual content or meaning
+7. Do NOT add summaries, headers, or commentary
+8. Do NOT use markdown formatting except for paragraph breaks
+
+Return ONLY the cleaned transcript text, nothing else.""",
+                },
+                {
+                    "role": "user",
+                    "content": f"""Please clean up this transcript from the video "{video_title}":
+
+{transcript_for_api}""",
+                },
+            ],
+            max_tokens=16000,  # Allow for long transcripts
+            model=GPT_MODEL,  # Use mini model for cost efficiency
+        )
+
+        return beautified
+
+    except openai.AuthenticationError:
+        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
+    except openai.RateLimitError:
+        raise APIError(
+            "OpenAI API rate limit exceeded after multiple retries. Please try again later."
+        )
+    except openai.APIConnectionError:
+        raise APIError(
+            "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
+        )
+    except openai.APIError as e:
+        raise APIError(f"OpenAI API error: {e}") from e
 
 
 def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, str]:
@@ -371,6 +456,7 @@ Write a clear, well-structured summary that captures the main points and key tak
                 }
             ],
             max_tokens=1024,
+            model=GPT_MODEL_ADVANCED,
         )
 
         # Generate quiz
@@ -408,6 +494,7 @@ Make sure:
                 }
             ],
             max_tokens=2048,
+            model=GPT_MODEL_ADVANCED,
         )
 
         return summary, quiz
@@ -485,14 +572,22 @@ Examples:
         audio_file = download_audio(args.url, output_path)
 
         # Transcribe
-        transcript = transcribe_audio(audio_file, args.model)
+        raw_transcript = transcribe_audio(audio_file, args.model)
 
-        # Save transcript
+        # Save raw transcript for reference
+        raw_transcript_file = output_path / "transcript_raw.md"
+        raw_transcript_file.write_text(f"# Raw Transcript: {video_title}\n\n{raw_transcript}\n")
+        logger.debug(f"Saved raw transcript: {raw_transcript_file}")
+
+        # Beautify transcript
+        transcript = beautify_transcript(raw_transcript, video_title)
+
+        # Save beautified transcript
         transcript_file = output_path / "transcript.md"
         transcript_file.write_text(f"# Transcript: {video_title}\n\n{transcript}\n")
         logger.info(f"Saved: {transcript_file}")
 
-        # Generate summary and quiz
+        # Generate summary and quiz (using beautified transcript)
         summary, quiz = generate_summary_and_quiz(transcript, video_title)
 
         # Save summary

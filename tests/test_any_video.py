@@ -10,6 +10,7 @@ from any_video import (
     APIError,
     DownloadError,
     TranscriptionError,
+    beautify_transcript,
     extract_video_id,
     retry_with_backoff,
     slugify,
@@ -377,3 +378,51 @@ class TestGenerateSummaryAndQuiz:
         assert summary == "Generated content"
         assert quiz == "Generated content"
         assert mock_client.chat.completions.create.call_count == 2
+
+
+class TestBeautifyTranscript:
+    """Tests for beautify_transcript function (mocked)."""
+
+    def test_missing_api_key(self):
+        """Test error when API key is not set."""
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(APIError, match="OPENAI_API_KEY"):
+                beautify_transcript("raw transcript", "title")
+
+    @patch("any_video.openai.OpenAI")
+    def test_successful_beautification(self, mock_openai_class):
+        """Test successful transcript beautification."""
+        # Mock the OpenAI client
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        # Mock the response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="Beautified transcript"))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+            result = beautify_transcript("raw um transcript with uh errors", "Test Title")
+
+        assert result == "Beautified transcript"
+        assert mock_client.chat.completions.create.call_count == 1
+
+    @patch("any_video.openai.OpenAI")
+    def test_beautification_uses_system_prompt(self, mock_openai_class):
+        """Test that beautification uses a system prompt for instructions."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="Clean text"))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+            beautify_transcript("raw text", "Title")
+
+        # Check that a system message was included
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args.kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert "transcript editor" in messages[0]["content"].lower()

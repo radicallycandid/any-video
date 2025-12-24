@@ -5,6 +5,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 ## Features
 
 - **Local Transcription**: Uses OpenAI's Whisper model running locally (no API costs for transcription)
+- **Transcript Beautification**: AI-powered cleanup of raw transcripts - fixes typos, corrects proper nouns, adds paragraph breaks
 - **AI Summaries**: Generates concise summaries using GPT-4.1
 - **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
 - **Multiple Whisper Models**: Choose between `tiny`, `small`, or `large-v3` based on your accuracy/speed needs
@@ -81,14 +82,15 @@ python any_video.py "https://youtube.com/shorts/VIDEO_ID" --output-dir ./my-resu
 
 ## Output
 
-For each video, the tool creates a folder with three markdown files:
+For each video, the tool creates a folder with four markdown files:
 
 ```
 output/
 └── VIDEO_ID_video-title-slug/
-    ├── transcript.md   # Full video transcript
-    ├── summary.md      # AI-generated summary
-    └── quiz.md         # 10 multiple-choice questions
+    ├── transcript.md       # Beautified, readable transcript
+    ├── transcript_raw.md   # Original Whisper output (for reference)
+    ├── summary.md          # AI-generated summary
+    └── quiz.md             # 10 multiple-choice questions
 ```
 
 ## Whisper Models
