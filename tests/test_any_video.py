@@ -334,17 +334,17 @@ class TestDownloadAudio:
 class TestTranscribeAudio:
     """Tests for transcribe_audio function (mocked)."""
 
-    def test_model_not_found(self, tmp_path):
-        """Test error when Whisper model doesn't exist."""
-        from any_video import WHISPER_MODELS_DIR, transcribe_audio
+    def test_transcription_failure(self, tmp_path):
+        """Test error when Whisper transcription fails."""
+        from any_video import transcribe_audio
 
-        # Use a non-existent model
         fake_audio = tmp_path / "audio.mp3"
         fake_audio.write_bytes(b"fake")
 
-        with patch.object(Path, "exists", return_value=False):
-            with pytest.raises(TranscriptionError, match="not found"):
-                transcribe_audio(fake_audio, "nonexistent-model")
+        with patch("any_video.whisper.load_model") as mock_load:
+            mock_load.side_effect = Exception("Model loading failed")
+            with pytest.raises(TranscriptionError, match="Transcription failed"):
+                transcribe_audio(fake_audio, "small")
 
 
 class TestGenerateSummaryAndQuiz:

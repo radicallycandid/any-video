@@ -15,15 +15,32 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 ## Requirements
 
 - Python 3.10+
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) for downloading YouTube audio
-- OpenAI API key (for summary and quiz generation)
-- Whisper model files in `~/whisper/`
+- **ffmpeg** (required for audio processing)
+- OpenAI API key (for summary, quiz, and transcript beautification)
+
+### Installing ffmpeg
+
+**macOS (Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update && sudo apt install ffmpeg
+```
+
+**Windows:**
+```bash
+winget install ffmpeg
+# Or download from https://ffmpeg.org/download.html
+```
 
 ## Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/any-video.git
+   git clone https://github.com/radicallycandid/any-video.git
    cd any-video
    ```
 
@@ -32,18 +49,17 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
    pip install -e .
    ```
 
+   **Using [uv](https://docs.astral.sh/uv/) (recommended for faster installs):**
+   ```bash
+   uv pip install -e .
+   ```
+
    Or with development dependencies:
    ```bash
    pip install -e ".[dev]"
    ```
 
-3. Download Whisper models to `~/whisper/`:
-   ```bash
-   mkdir -p ~/whisper
-   # Models will be downloaded automatically on first use, or you can pre-download them
-   ```
-
-4. Set your OpenAI API key:
+3. Set your OpenAI API key:
    ```bash
    export OPENAI_API_KEY='your-key-here'
    ```
@@ -94,6 +110,8 @@ output/
 ```
 
 ## Whisper Models
+
+Whisper models are downloaded automatically on first use to `~/whisper/`. The initial download may take a few minutes depending on model size.
 
 | Model | Size | Speed | Accuracy |
 |-------|------|-------|----------|

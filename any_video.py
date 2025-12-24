@@ -254,17 +254,15 @@ def transcribe_audio(audio_path: Path, model_name: str) -> str:
     Raises:
         TranscriptionError: If transcription fails.
     """
-    model_path = WHISPER_MODELS_DIR / f"{model_name}.pt"
-    if not model_path.exists():
-        available = list(WHISPER_MODELS_DIR.glob("*.pt"))
-        available_names = [p.stem for p in available] if available else ["none found"]
-        raise TranscriptionError(
-            f"Model '{model_name}' not found at {model_path}. "
-            f"Available models: {', '.join(available_names)}"
-        )
+    # Ensure the whisper models directory exists
+    WHISPER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
-        logger.info(f"Loading Whisper model: {model_name}...")
+        model_path = WHISPER_MODELS_DIR / f"{model_name}.pt"
+        if not model_path.exists():
+            logger.info(f"Downloading Whisper model '{model_name}' (this may take a few minutes)...")
+        else:
+            logger.info(f"Loading Whisper model: {model_name}...")
         model = whisper.load_model(model_name, download_root=str(WHISPER_MODELS_DIR))
 
         logger.info("Transcribing audio (this may take a while)...")
@@ -318,10 +316,18 @@ def _call_openai_api(
     Returns:
         The response content as a string.
     """
+    actual_model = model or GPT_MODEL
+    # Newer models (gpt-4.1, gpt-5.x, o-series) use max_completion_tokens instead of max_tokens
+    use_new_param = any(
+        actual_model.startswith(prefix) for prefix in ("gpt-4.1", "gpt-5", "o1", "o3")
+    )
+    token_param = (
+        {"max_completion_tokens": max_tokens} if use_new_param else {"max_tokens": max_tokens}
+    )
     response = client.chat.completions.create(
-        model=model or GPT_MODEL,
-        max_tokens=max_tokens,
+        model=actual_model,
         messages=messages,
+        **token_param,
     )
     return response.choices[0].message.content
 
@@ -440,6 +446,8 @@ def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, s
         client = openai.OpenAI()
 
         # Generate summary
+        # Note: Reasoning models (gpt-5.x, o-series) use thinking tokens that count against
+        # max_completion_tokens. We need enough budget for both reasoning and the actual output.
         logger.info("Generating summary...")
         summary = _call_openai_api(
             client,
@@ -465,7 +473,7 @@ Transcript:
 {transcript_for_api}""",
                 }
             ],
-            max_tokens=1024,
+            max_tokens=4000,
             model=GPT_MODEL_ADVANCED,
         )
 
