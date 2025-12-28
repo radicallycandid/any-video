@@ -609,6 +609,11 @@ Examples:
         action="store_true",
         help="Enable verbose output with debug information",
     )
+    parser.add_argument(
+        "--keep-audio",
+        action="store_true",
+        help="Keep the downloaded audio file instead of deleting it",
+    )
     args = parser.parse_args()
 
     # Set up logging
@@ -665,9 +670,12 @@ Examples:
         quiz_file.write_text(f"# Quiz: {video_title}\n\n{quiz}\n")
         logger.info(f"Saved: {quiz_file}")
 
-        # Clean up audio file
-        audio_file.unlink()
-        logger.debug("Cleaned up temporary audio file")
+        # Clean up audio file (unless user wants to keep it)
+        if args.keep_audio:
+            logger.info(f"Audio file kept: {audio_file}")
+        else:
+            audio_file.unlink()
+            logger.debug("Cleaned up temporary audio file")
 
         logger.info(f"\nDone! Files saved to: {output_path}")
 

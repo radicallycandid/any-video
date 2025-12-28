@@ -76,6 +76,7 @@ uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID" -v
 | `url` | YouTube video URL (required) | - |
 | `--model` | Whisper model: `tiny`, `small`, `large-v3` | `small` |
 | `--output-dir` | Output directory for generated files | `./output` |
+| `--keep-audio` | Keep the downloaded audio file | off |
 | `-v, --verbose` | Enable debug output | off |
 
 ### Supported URL Formats
