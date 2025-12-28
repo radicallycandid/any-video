@@ -283,12 +283,12 @@ class TestGetVideoTitle:
         with pytest.raises(DownloadError, match="Timed out"):
             get_video_title("https://youtube.com/watch?v=test")
 
-    @patch("any_video.subprocess.run")
-    def test_ytdlp_not_found(self, mock_run):
+    @patch("any_video.get_yt_dlp_path")
+    def test_ytdlp_not_found(self, mock_get_path):
         """Test handling when yt-dlp is not installed."""
         from any_video import get_video_title
 
-        mock_run.side_effect = FileNotFoundError()
+        mock_get_path.side_effect = DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
         with pytest.raises(DownloadError, match="yt-dlp not found"):
             get_video_title("https://youtube.com/watch?v=test")
 

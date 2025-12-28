@@ -25,6 +25,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+server = [
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-mock>=3.0.0",
