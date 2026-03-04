@@ -188,6 +188,26 @@ class TestSplitIntoChunks:
         chunks = _split_into_chunks("", chunk_size=100)
         assert chunks == [""]
 
+    def test_splits_at_word_boundary_when_no_sentence_boundary(self):
+        """Test fallback to word boundary when no period exists."""
+        text = "word " * 20  # 100 chars of words with spaces but no periods
+        chunks = _split_into_chunks(text.strip(), chunk_size=40)
+        assert len(chunks) >= 2
+        # First chunk should end at a word boundary (no trailing partial word)
+        assert not chunks[0].endswith("wor")
+        # All content preserved
+        assert "".join(chunks) == text.strip()
+
+    def test_hard_cuts_when_no_spaces(self):
+        """Test hard cut when text has no whitespace at all."""
+        text = "a" * 100
+        chunks = _split_into_chunks(text, chunk_size=40)
+        assert len(chunks) == 3
+        assert chunks[0] == "a" * 40
+        assert chunks[1] == "a" * 40
+        assert chunks[2] == "a" * 20
+        assert "".join(chunks) == text
+
 
 class TestProcessingResult:
     """Tests for ProcessingResult dataclass."""
@@ -419,6 +439,22 @@ class TestTranscribeAudio:
             with pytest.raises(TranscriptionError, match="Transcription failed"):
                 transcribe_audio(fake_audio, "small")
 
+    def test_successful_transcription(self, tmp_path):
+        """Test successful audio transcription returns text."""
+        from any_video.transcriber import transcribe_audio
+
+        fake_audio = tmp_path / "audio.mp3"
+        fake_audio.write_bytes(b"fake")
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {"text": "hello world"}
+
+        with patch("any_video.transcriber.whisper.load_model", return_value=mock_model):
+            result = transcribe_audio(fake_audio, "small")
+
+        assert result == "hello world"
+        mock_model.transcribe.assert_called_once_with(str(fake_audio), verbose=False)
+
 
 class TestGenerateSummaryAndQuiz:
     """Tests for generate_summary_and_quiz function (mocked)."""
@@ -503,6 +539,28 @@ class TestBeautifyTranscript:
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert "transcript editor" in messages[0]["content"].lower()
+
+    @patch("any_video.openai_client.openai.OpenAI")
+    def test_multi_chunk_beautification(self, mock_openai_class):
+        """Test that long transcripts are split into chunks and results joined."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        # Return different content for each chunk call
+        responses = [
+            MagicMock(choices=[MagicMock(message=MagicMock(content="Chunk 1 result"))]),
+            MagicMock(choices=[MagicMock(message=MagicMock(content="Chunk 2 result"))]),
+        ]
+        mock_client.chat.completions.create.side_effect = responses
+
+        # Create text that exceeds chunk_size to force splitting
+        long_text = "word " * 20000  # ~100K chars
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
+            result = beautify_transcript(long_text.strip(), "Title", model="gpt-4.1")
+
+        assert mock_client.chat.completions.create.call_count == 2
+        assert result == "Chunk 1 result\n\nChunk 2 result"
 
 
 class TestProcessVideo:
@@ -963,3 +1021,88 @@ class TestMain:
         ):
             main()
         assert exc_info.value.code == 130
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_skips_processing_when_output_exists(
+        self, mock_extract, mock_title, mock_process, tmp_path
+    ):
+        """Test that existing output causes early exit without re-processing."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+
+        # Pre-create output files
+        output_dir = tmp_path / "output"
+        expected_dir = output_dir / "abc123_test-video"
+        expected_dir.mkdir(parents=True)
+        for f in ["transcript_raw.md", "transcript.md", "summary.md", "quiz.md"]:
+            (expected_dir / f).write_text("existing content")
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 0
+        mock_process.assert_not_called()
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_force_flag_reprocesses(self, mock_extract, mock_title, mock_process, tmp_path):
+        """Test that --force re-processes even when output exists."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+
+        output_dir = tmp_path / "output"
+        expected_dir = output_dir / "abc123_test-video"
+        expected_dir.mkdir(parents=True)
+        for f in ["transcript_raw.md", "transcript.md", "summary.md", "quiz.md"]:
+            (expected_dir / f).write_text("existing content")
+
+        def mock_process_fn(url, model, work_dir=None, **kwargs):
+            if work_dir:
+                work_dir.mkdir(parents=True, exist_ok=True)
+            return ProcessingResult(
+                video_id="abc123",
+                video_title="Test Video",
+                transcript_raw="new raw",
+                transcript="new clean",
+                summary="new summary",
+                quiz="new quiz",
+                audio_path=None,
+            )
+
+        mock_process.side_effect = mock_process_fn
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    str(output_dir),
+                    "--force",
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+        ):
+            main()
+
+        mock_process.assert_called_once()
