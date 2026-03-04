@@ -9,6 +9,8 @@ The server listens on http://localhost:8765
 import logging
 import os
 import tempfile
+import threading
+import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -40,6 +42,64 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["60 per minute"])
 # Set up logging
 setup_logging(verbose=True)
 
+# In-memory store for async job progress and results
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _run_job(request_id: str, url: str, model: str, keep_audio: bool) -> None:
+    """Run process_video in a background thread, updating progress."""
+
+    def on_progress(stage: str, pct: int) -> None:
+        with _jobs_lock:
+            _jobs[request_id]["stage"] = stage
+            _jobs[request_id]["progress"] = pct
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = process_video(url, model, work_dir=Path(temp_dir), on_progress=on_progress)
+
+            response = {
+                "success": True,
+                "video_id": result.video_id,
+                "video_title": result.video_title,
+                "transcript_raw": result.transcript_raw,
+                "transcript": result.transcript,
+                "summary": result.summary,
+                "quiz": result.quiz,
+            }
+
+            if keep_audio and result.audio_path:
+                output_dir = Path(__file__).parent / "output"
+                folder_name = f"{result.video_id}_{slugify(result.video_title)}"
+                video_output = output_dir / folder_name
+                video_output.mkdir(parents=True, exist_ok=True)
+
+                persistent_audio = video_output / "audio.mp3"
+                result.audio_path.rename(persistent_audio)
+                response["audio_path"] = str(persistent_audio)
+
+            with _jobs_lock:
+                _jobs[request_id]["result"] = response
+                _jobs[request_id]["stage"] = "Complete"
+                _jobs[request_id]["progress"] = 100
+
+    except ValueError as e:
+        with _jobs_lock:
+            _jobs[request_id]["result"] = {"success": False, "error": str(e)}
+            _jobs[request_id]["error_code"] = 400
+    except (DownloadError, TranscriptionError, APIError) as e:
+        with _jobs_lock:
+            _jobs[request_id]["result"] = {"success": False, "error": str(e)}
+            _jobs[request_id]["error_code"] = 500
+    except (OSError, RuntimeError) as e:
+        with _jobs_lock:
+            _jobs[request_id]["result"] = {
+                "success": False,
+                "error": f"Unexpected error: {e}",
+            }
+            _jobs[request_id]["error_code"] = 500
+
 
 @app.route("/health", methods=["GET"])
 @limiter.limit("30 per minute")
@@ -58,7 +118,7 @@ def health():
 @limiter.limit("5 per minute")
 def process_video_endpoint():
     """
-    Process a YouTube video: download, transcribe, beautify, summarize, and generate quiz.
+    Start processing a YouTube video asynchronously.
 
     Request body:
         {
@@ -68,16 +128,7 @@ def process_video_endpoint():
         }
 
     Returns:
-        {
-            "success": true,
-            "video_id": "...",
-            "video_title": "...",
-            "transcript_raw": "...",
-            "transcript": "...",
-            "summary": "...",
-            "quiz": "...",
-            "audio_path": "..."  // only if keep_audio is true
-        }
+        {"request_id": "..."} — use GET /progress/<id> and /result/<id> to poll.
     """
     data = request.get_json()
 
@@ -88,7 +139,6 @@ def process_video_endpoint():
     model = data.get("model", "small")
     keep_audio = data.get("keep_audio", False)
 
-    # Validate model choice
     if model not in ("tiny", "small", "large-v3"):
         return jsonify(
             {
@@ -97,44 +147,58 @@ def process_video_endpoint():
             }
         ), 400
 
-    # Check for API key
     if not os.environ.get("OPENAI_API_KEY"):
         return jsonify({"success": False, "error": "OPENAI_API_KEY not set on server"}), 500
 
-    try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result = process_video(url, model, work_dir=Path(temp_dir))
+    request_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[request_id] = {"stage": "Starting", "progress": 0, "result": None}
 
-            response = {
-                "success": True,
-                "video_id": result.video_id,
-                "video_title": result.video_title,
-                "transcript_raw": result.transcript_raw,
-                "transcript": result.transcript,
-                "summary": result.summary,
-                "quiz": result.quiz,
-            }
+    thread = threading.Thread(
+        target=_run_job, args=(request_id, url, model, keep_audio), daemon=True
+    )
+    thread.start()
 
-            # Handle audio file
-            if keep_audio and result.audio_path:
-                # Move audio to a persistent location
-                output_dir = Path(__file__).parent / "output"
-                folder_name = f"{result.video_id}_{slugify(result.video_title)}"
-                video_output = output_dir / folder_name
-                video_output.mkdir(parents=True, exist_ok=True)
+    return jsonify({"request_id": request_id})
 
-                persistent_audio = video_output / "audio.mp3"
-                result.audio_path.rename(persistent_audio)
-                response["audio_path"] = str(persistent_audio)
 
-            return jsonify(response)
+@app.route("/progress/<request_id>", methods=["GET"])
+@limiter.limit("60 per minute")
+def get_progress(request_id):
+    """Return current progress for a processing job."""
+    with _jobs_lock:
+        job = _jobs.get(request_id)
 
-    except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-    except (DownloadError, TranscriptionError, APIError) as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    except (OSError, RuntimeError) as e:
-        return jsonify({"success": False, "error": f"Unexpected error: {e}"}), 500
+    if not job:
+        return jsonify({"error": "Unknown request_id"}), 404
+
+    return jsonify({"stage": job["stage"], "progress": job["progress"]})
+
+
+@app.route("/result/<request_id>", methods=["GET"])
+@limiter.limit("30 per minute")
+def get_result(request_id):
+    """Return the result of a completed processing job."""
+    with _jobs_lock:
+        job = _jobs.get(request_id)
+
+    if not job:
+        return jsonify({"error": "Unknown request_id"}), 404
+
+    if job["result"] is None:
+        return jsonify({"status": "pending", "stage": job["stage"], "progress": job["progress"]})
+
+    error_code = job.get("error_code")
+    result = job["result"]
+
+    # Clean up completed job
+    with _jobs_lock:
+        _jobs.pop(request_id, None)
+
+    if error_code:
+        return jsonify(result), error_code
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":
