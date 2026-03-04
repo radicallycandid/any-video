@@ -1,8 +1,7 @@
 """Tests for the Flask server."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,10 +10,24 @@ from any_video import APIError, DownloadError, ProcessingResult, TranscriptionEr
 
 @pytest.fixture
 def client():
-    """Create a Flask test client."""
-    from server import app
+    """Create a Flask test client with rate limiting disabled."""
+    from server import app, limiter
 
     app.config["TESTING"] = True
+    limiter.enabled = False
+    with app.test_client() as client:
+        yield client
+    limiter.enabled = True
+
+
+@pytest.fixture
+def rate_limited_client():
+    """Create a Flask test client with rate limiting enabled."""
+    from server import app, limiter
+
+    app.config["TESTING"] = True
+    limiter.enabled = True
+    limiter.reset()
     with app.test_client() as client:
         yield client
 
@@ -227,3 +240,33 @@ class TestProcessEndpoint:
 
         call_args = mock_process.call_args
         assert call_args[0][1] == "small"  # second positional arg is model
+
+
+class TestRateLimiting:
+    """Tests for rate limiting on endpoints."""
+
+    def test_process_rate_limit(self, rate_limited_client):
+        """Test that /process is rate limited to 5 per minute."""
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "key"}):
+            for _ in range(5):
+                response = rate_limited_client.post(
+                    "/process",
+                    data=json.dumps({"url": "https://youtube.com/watch?v=abc"}),
+                    content_type="application/json",
+                )
+                # These will fail with 400/500 but not 429
+                assert response.status_code != 429
+
+            # 6th request should be rate limited
+            response = rate_limited_client.post(
+                "/process",
+                data=json.dumps({"url": "https://youtube.com/watch?v=abc"}),
+                content_type="application/json",
+            )
+            assert response.status_code == 429
+
+    def test_health_not_rate_limited_under_normal_use(self, rate_limited_client):
+        """Test that /health allows at least 10 rapid requests."""
+        for _ in range(10):
+            response = rate_limited_client.get("/health")
+            assert response.status_code == 200

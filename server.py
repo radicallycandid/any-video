@@ -6,12 +6,15 @@ Run with: uv run python server.py
 The server listens on http://localhost:8765
 """
 
+import logging
 import os
 import tempfile
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from any_video import (
     APIError,
@@ -22,14 +25,24 @@ from any_video import (
     slugify,
 )
 
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
-CORS(app)  # Allow requests from Chrome extension
+CORS(
+    app,
+    origins=["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"],
+    methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+    max_age=600,
+)
+limiter = Limiter(get_remote_address, app=app, default_limits=["60 per minute"])
 
 # Set up logging
 setup_logging(verbose=True)
 
 
 @app.route("/health", methods=["GET"])
+@limiter.limit("30 per minute")
 def health():
     """Health check endpoint."""
     has_api_key = bool(os.environ.get("OPENAI_API_KEY"))
@@ -40,6 +53,7 @@ def health():
 
 
 @app.route("/process", methods=["POST"])
+@limiter.limit("5 per minute")
 def process_video_endpoint():
     """
     Process a YouTube video: download, transcribe, beautify, summarize, and generate quiz.
