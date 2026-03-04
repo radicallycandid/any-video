@@ -17,14 +17,9 @@ from any_video import (
     APIError,
     DownloadError,
     TranscriptionError,
-    beautify_transcript,
-    download_audio,
-    extract_video_id,
-    generate_summary_and_quiz,
-    get_video_title,
+    process_video,
     setup_logging,
     slugify,
-    transcribe_audio,
 )
 
 app = Flask(__name__)
@@ -32,9 +27,6 @@ CORS(app)  # Allow requests from Chrome extension
 
 # Set up logging
 setup_logging(verbose=True)
-
-# Store active jobs for progress tracking
-jobs: dict[str, dict] = {}
 
 
 @app.route("/health", methods=["GET"])
@@ -48,7 +40,7 @@ def health():
 
 
 @app.route("/process", methods=["POST"])
-def process_video():
+def process_video_endpoint():
     """
     Process a YouTube video: download, transcribe, beautify, summarize, and generate quiz.
 
@@ -95,60 +87,37 @@ def process_video():
         }), 500
 
     try:
-        # Extract video info
-        video_id = extract_video_id(url)
-        video_title = get_video_title(url)
-
-        # Create temp directory for processing
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+            result = process_video(url, model, work_dir=Path(temp_dir))
 
-            # Download audio
-            audio_file = download_audio(url, temp_path)
-
-            # Transcribe
-            raw_transcript = transcribe_audio(audio_file, model)
-
-            # Beautify transcript
-            transcript = beautify_transcript(raw_transcript, video_title)
-
-            # Generate summary and quiz
-            summary, quiz = generate_summary_and_quiz(transcript, video_title)
-
-            # Build response
-            result = {
+            response = {
                 "success": True,
-                "video_id": video_id,
-                "video_title": video_title,
-                "transcript_raw": raw_transcript,
-                "transcript": transcript,
-                "summary": summary,
-                "quiz": quiz,
+                "video_id": result.video_id,
+                "video_title": result.video_title,
+                "transcript_raw": result.transcript_raw,
+                "transcript": result.transcript,
+                "summary": result.summary,
+                "quiz": result.quiz,
             }
 
             # Handle audio file
-            if keep_audio:
+            if keep_audio and result.audio_path:
                 # Move audio to a persistent location
                 output_dir = Path(__file__).parent / "output"
-                output_dir.mkdir(exist_ok=True)
-                folder_name = f"{video_id}_{slugify(video_title)}"
+                folder_name = f"{result.video_id}_{slugify(result.video_title)}"
                 video_output = output_dir / folder_name
-                video_output.mkdir(exist_ok=True)
+                video_output.mkdir(parents=True, exist_ok=True)
 
                 persistent_audio = video_output / "audio.mp3"
-                audio_file.rename(persistent_audio)
-                result["audio_path"] = str(persistent_audio)
+                result.audio_path.rename(persistent_audio)
+                response["audio_path"] = str(persistent_audio)
 
-            return jsonify(result)
+            return jsonify(response)
 
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
-    except DownloadError as e:
-        return jsonify({"success": False, "error": f"Download failed: {e}"}), 500
-    except TranscriptionError as e:
-        return jsonify({"success": False, "error": f"Transcription failed: {e}"}), 500
-    except APIError as e:
-        return jsonify({"success": False, "error": f"API error: {e}"}), 500
+    except (DownloadError, TranscriptionError, APIError) as e:
+        return jsonify({"success": False, "error": str(e)}), 500
     except Exception as e:
         return jsonify({"success": False, "error": f"Unexpected error: {e}"}), 500
 
