@@ -181,6 +181,10 @@ header .subtitle {
   color: #999;
 }
 
+.cancel-btn {
+  margin-top: 12px;
+}
+
 /* Tabs */
 .tabs {
   display: flex;
@@ -227,7 +231,104 @@ header .subtitle {
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.6;
-  white-space: pre-wrap;
+}
+
+.content h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+
+.content h1:first-child {
+  margin-top: 0;
+}
+
+.content h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+}
+
+.content h2:first-child {
+  margin-top: 0;
+}
+
+.content p {
+  margin: 6px 0;
+}
+
+.content ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.content li {
+  margin: 2px 0;
+}
+
+.content hr {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 12px 0;
+}
+
+.content strong {
+  font-weight: 600;
+}
+
+.content em {
+  font-style: italic;
+}
+
+.content h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+.content ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.content code {
+  background: #e8e8e8;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.content pre {
+  background: #2d2d2d;
+  color: #f0f0f0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.content pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 12px;
+}
+
+.content blockquote {
+  border-left: 3px solid #ddd;
+  padding-left: 10px;
+  color: #555;
+  margin: 6px 0;
+}
+
+.content a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.content a:hover {
+  text-decoration: underline;
 }
 
 /* Actions */
