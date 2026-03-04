@@ -54,6 +54,11 @@ Examples:
         help="Keep the downloaded audio file instead of deleting it",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-process even if output already exists",
+    )
+    parser.add_argument(
         "--gpt-model",
         default=None,
         help=f"GPT model for transcript beautification (default: {GPT_MODEL})",
@@ -82,6 +87,12 @@ Examples:
         video_title = get_video_title(args.url)
         folder_name = f"{video_id}_{slugify(video_title)}"
         output_path = args.output_dir / folder_name
+
+        # Check for existing output (skip if already processed)
+        expected_files = ["transcript_raw.md", "transcript.md", "summary.md", "quiz.md"]
+        if not args.force and all((output_path / f).exists() for f in expected_files):
+            logger.info(f"Output already exists at {output_path}. Use --force to re-process.")
+            sys.exit(0)
 
         # Run the pipeline, passing pre-computed info to avoid duplicate work
         result = process_video(
