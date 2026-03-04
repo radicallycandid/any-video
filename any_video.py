@@ -21,8 +21,11 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
-from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import cache, wraps
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -32,10 +35,10 @@ import whisper
 # Configuration
 WHISPER_MODELS_DIR = Path.home() / "whisper"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "output"
-YT_DLP_PATH: str | None = None  # Cached path to yt-dlp executable
-GPT_MODEL = "gpt-4.1"  # Model for transcript beautification
-GPT_MODEL_ADVANCED = "gpt-5.2"  # Latest flagship model for summary/quiz generation
-MAX_TRANSCRIPT_CHARS = 100000  # Approximate limit to avoid token overflow
+GPT_MODEL = os.environ.get("ANY_VIDEO_GPT_MODEL", "gpt-4.1")
+GPT_MODEL_ADVANCED = os.environ.get("ANY_VIDEO_GPT_MODEL_ADVANCED", "gpt-5.2")
+MAX_TRANSCRIPT_CHARS = 100_000
+BEAUTIFY_CHUNK_SIZE = 50_000
 
 # Retry configuration
 MAX_RETRIES = 3
@@ -49,6 +52,8 @@ T = TypeVar("T")
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for the application."""
+    if logger.handlers:
+        return
     level = logging.DEBUG if verbose else logging.INFO
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("%(message)s"))
@@ -116,6 +121,7 @@ class DownloadError(Exception):
     pass
 
 
+@cache
 def get_yt_dlp_path() -> str:
     """
     Find the yt-dlp executable, preferring the one in the same directory as Python.
@@ -129,24 +135,18 @@ def get_yt_dlp_path() -> str:
     Raises:
         DownloadError: If yt-dlp is not found.
     """
-    global YT_DLP_PATH
-    if YT_DLP_PATH is not None:
-        return YT_DLP_PATH
-
     import shutil
 
     # First, check in the same directory as the Python interpreter (venv bin)
     python_dir = Path(sys.executable).parent
     venv_yt_dlp = python_dir / "yt-dlp"
     if venv_yt_dlp.exists():
-        YT_DLP_PATH = str(venv_yt_dlp)
-        return YT_DLP_PATH
+        return str(venv_yt_dlp)
 
     # Fall back to system PATH
     system_yt_dlp = shutil.which("yt-dlp")
     if system_yt_dlp:
-        YT_DLP_PATH = system_yt_dlp
-        return YT_DLP_PATH
+        return system_yt_dlp
 
     raise DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
 
@@ -330,83 +330,74 @@ def truncate_transcript(transcript: str, max_chars: int = MAX_TRANSCRIPT_CHARS) 
     return truncated, True
 
 
+# --- OpenAI API layer ---
+
+
+def _get_openai_client() -> openai.OpenAI:
+    """Create an OpenAI client, validating the API key is set."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise APIError(
+            "OPENAI_API_KEY environment variable not set. "
+            "Export it with: export OPENAI_API_KEY='your-key-here'"
+        )
+    return openai.OpenAI()
+
+
 @retry_with_backoff(
     max_retries=MAX_RETRIES,
     base_delay=RETRY_DELAY,
     exceptions=(openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError),
 )
-def _call_openai_api(
-    client: openai.OpenAI, messages: list, max_tokens: int, model: str | None = None
+def _raw_openai_call(
+    client: openai.OpenAI, messages: list, max_tokens: int, model: str
 ) -> str:
-    """
-    Make an OpenAI API call with retry logic.
-
-    Args:
-        client: OpenAI client instance.
-        messages: List of message dicts for the chat completion.
-        max_tokens: Maximum tokens in the response.
-        model: Optional model override. Defaults to GPT_MODEL.
-
-    Returns:
-        The response content as a string.
-    """
-    actual_model = model or GPT_MODEL
-    # Newer models (gpt-4.1, gpt-5.x, o-series) use max_completion_tokens instead of max_tokens
-    use_new_param = any(
-        actual_model.startswith(prefix) for prefix in ("gpt-4.1", "gpt-5", "o1", "o3")
-    )
+    """Make a raw OpenAI API call with automatic retry on transient errors."""
+    use_new_param = any(model.startswith(p) for p in ("gpt-4.1", "gpt-5", "o1", "o3"))
     token_param = (
         {"max_completion_tokens": max_tokens} if use_new_param else {"max_tokens": max_tokens}
     )
     response = client.chat.completions.create(
-        model=actual_model,
+        model=model,
         messages=messages,
         **token_param,
     )
     return response.choices[0].message.content
 
 
-def beautify_transcript(raw_transcript: str, video_title: str) -> str:
+def _call_openai_api(
+    messages: list, max_tokens: int, model: str | None = None
+) -> str:
     """
-    Clean up and format raw Whisper transcript using an LLM.
+    Make an OpenAI API call with retry logic and error translation.
 
-    Fixes common transcription errors, corrects proper nouns based on context,
-    adds paragraph breaks, and improves overall readability.
-
-    Args:
-        raw_transcript: The raw transcript from Whisper.
-        video_title: The video title for context.
-
-    Returns:
-        The beautified transcript text.
-
-    Raises:
-        APIError: If the API call fails.
+    All OpenAI-specific exceptions are caught and re-raised as APIError,
+    providing a single place for error handling across the entire module.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise APIError(
-            "OPENAI_API_KEY environment variable not set. "
-            "Export it with: export OPENAI_API_KEY='your-key-here'"
-        )
-
-    # For very long transcripts, we need to process in chunks
-    transcript_for_api, was_truncated = truncate_transcript(raw_transcript)
-    if was_truncated:
-        logger.warning(
-            f"Transcript was truncated from {len(raw_transcript):,} to "
-            f"{len(transcript_for_api):,} characters for beautification."
-        )
-
+    client = _get_openai_client()
+    actual_model = model or GPT_MODEL
     try:
-        client = openai.OpenAI()
+        return _raw_openai_call(client, messages, max_tokens, actual_model)
+    except openai.AuthenticationError:
+        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
+    except openai.RateLimitError:
+        raise APIError(
+            "OpenAI API rate limit exceeded after multiple retries. Please try again later."
+        )
+    except openai.APIConnectionError:
+        raise APIError(
+            "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
+        )
+    except openai.APITimeoutError:
+        raise APIError(
+            "OpenAI API request timed out after multiple retries. Please try again later."
+        )
+    except openai.APIError as e:
+        raise APIError(f"OpenAI API error: {e}") from e
 
-        logger.info("Beautifying transcript...")
-        beautified = _call_openai_api(
-            client,
-            [
-                {
-                    "role": "system",
-                    "content": """You are an expert transcript editor. Your job is to clean up raw speech-to-text transcripts while preserving the original meaning exactly.
+
+# --- Transcript processing ---
+
+BEAUTIFY_SYSTEM_PROMPT = """You are an expert transcript editor. Your job is to clean up raw speech-to-text transcripts while preserving the original meaning exactly.
 
 Your tasks:
 1. Fix obvious transcription errors and typos
@@ -418,42 +409,85 @@ Your tasks:
 7. Do NOT add summaries, headers, or commentary
 8. Do NOT use markdown formatting except for paragraph breaks
 
-Return ONLY the cleaned transcript text, nothing else.""",
-                },
+Return ONLY the cleaned transcript text, nothing else."""
+
+
+def _split_into_chunks(text: str, chunk_size: int = BEAUTIFY_CHUNK_SIZE) -> list[str]:
+    """Split text into chunks at sentence boundaries for processing."""
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= chunk_size:
+            chunks.append(remaining)
+            break
+        candidate = remaining[:chunk_size]
+        last_period = candidate.rfind(". ")
+        split_at = (last_period + 2) if last_period > chunk_size * 0.8 else chunk_size
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+    return chunks
+
+
+def beautify_transcript(raw_transcript: str, video_title: str, model: str | None = None) -> str:
+    """
+    Clean up and format raw Whisper transcript using an LLM.
+
+    Processes long transcripts in chunks to avoid content loss from truncation.
+
+    Args:
+        raw_transcript: The raw transcript from Whisper.
+        video_title: The video title for context.
+        model: Optional model override. Defaults to GPT_MODEL.
+
+    Returns:
+        The beautified transcript text.
+
+    Raises:
+        APIError: If the API call fails.
+    """
+    chunks = _split_into_chunks(raw_transcript)
+    if len(chunks) > 1:
+        logger.info(f"Processing transcript in {len(chunks)} chunks...")
+
+    beautified_chunks = []
+    for i, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            logger.info(f"Beautifying chunk {i + 1}/{len(chunks)}...")
+        else:
+            logger.info("Beautifying transcript...")
+
+        beautified = _call_openai_api(
+            [
+                {"role": "system", "content": BEAUTIFY_SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"""Please clean up this transcript from the video "{video_title}":
-
-{transcript_for_api}""",
+                    "content": (
+                        f'Please clean up this transcript from the video "{video_title}":'
+                        f"\n\n{chunk}"
+                    ),
                 },
             ],
-            max_tokens=16000,  # Allow for long transcripts
-            model=GPT_MODEL,  # Use mini model for cost efficiency
+            max_tokens=16000,
+            model=model or GPT_MODEL,
         )
+        beautified_chunks.append(beautified)
 
-        return beautified
-
-    except openai.AuthenticationError:
-        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
-    except openai.RateLimitError:
-        raise APIError(
-            "OpenAI API rate limit exceeded after multiple retries. Please try again later."
-        )
-    except openai.APIConnectionError:
-        raise APIError(
-            "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
-        )
-    except openai.APIError as e:
-        raise APIError(f"OpenAI API error: {e}") from e
+    return "\n\n".join(beautified_chunks)
 
 
-def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, str]:
+def generate_summary_and_quiz(
+    transcript: str, video_title: str, model: str | None = None
+) -> tuple[str, str]:
     """
-    Generate summary and quiz using OpenAI API.
+    Generate summary and quiz from a transcript, in parallel.
 
     Args:
         transcript: The video transcript text.
         video_title: The title of the video.
+        model: Optional model override. Defaults to GPT_MODEL_ADVANCED.
 
     Returns:
         A tuple of (summary, quiz) as strings.
@@ -461,13 +495,6 @@ def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, s
     Raises:
         APIError: If the API calls fail.
     """
-    # Check for API key
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise APIError(
-            "OPENAI_API_KEY environment variable not set. "
-            "Export it with: export OPENAI_API_KEY='your-key-here'"
-        )
-
     # Truncate transcript if needed
     transcript_for_api, was_truncated = truncate_transcript(transcript)
     if was_truncated:
@@ -476,19 +503,12 @@ def generate_summary_and_quiz(transcript: str, video_title: str) -> tuple[str, s
             f"{len(transcript_for_api):,} characters to fit API limits."
         )
 
-    try:
-        client = openai.OpenAI()
+    actual_model = model or GPT_MODEL_ADVANCED
 
-        # Generate summary
-        # Note: Reasoning models (gpt-5.x, o-series) use thinking tokens that count against
-        # max_completion_tokens. We need enough budget for both reasoning and the actual output.
-        logger.info("Generating summary...")
-        summary = _call_openai_api(
-            client,
-            [
-                {
-                    "role": "system",
-                    "content": """You are an expert content summarizer. Your summaries should be direct and opinionated, capturing the actual claims, arguments, and opinions expressed in the content.
+    summary_messages = [
+        {
+            "role": "system",
+            "content": """You are an expert content summarizer. Your summaries should be direct and opinionated, capturing the actual claims, arguments, and opinions expressed in the content.
 
 Key guidelines:
 - Use direct, assertive language: "X argues that..." or "X states that..." rather than "X reflects on..." or "X discusses..."
@@ -497,28 +517,21 @@ Key guidelines:
 - Present the substance of what was said, not a meta-description of the video
 - Be concise but substantive - every sentence should convey meaningful content
 - If the speaker expresses strong opinions or makes bold claims, include them directly""",
-                },
-                {
-                    "role": "user",
-                    "content": f"""Summarize the key points, arguments, and opinions from this video transcript.
+        },
+        {
+            "role": "user",
+            "content": f"""Summarize the key points, arguments, and opinions from this video transcript.
 Video title: "{video_title}"
 
 Transcript:
 {transcript_for_api}""",
-                }
-            ],
-            max_tokens=4000,
-            model=GPT_MODEL_ADVANCED,
-        )
+        },
+    ]
 
-        # Generate quiz
-        logger.info("Generating quiz...")
-        quiz = _call_openai_api(
-            client,
-            [
-                {
-                    "role": "system",
-                    "content": """You are an expert quiz creator. Create high-quality multiple choice questions that genuinely test comprehension.
+    quiz_messages = [
+        {
+            "role": "system",
+            "content": """You are an expert quiz creator. Create high-quality multiple choice questions that genuinely test comprehension.
 
 Critical requirements for answer options:
 1. ALL four options (A, B, C, D) must be similar in length, tone, and level of detail
@@ -532,10 +545,10 @@ Question quality guidelines:
 - Wrong answers should be reasonable interpretations that someone might believe if they misunderstood
 - Avoid "all of the above" or "none of the above" options
 - Each question should test a distinct concept or claim from the content""",
-                },
-                {
-                    "role": "user",
-                    "content": f"""Create a 10-question multiple choice quiz based on this video transcript.
+        },
+        {
+            "role": "user",
+            "content": f"""Create a 10-question multiple choice quiz based on this video transcript.
 Video title: "{video_title}"
 
 Transcript:
@@ -556,26 +569,86 @@ Format each question exactly like this:
 ---
 
 Remember: Vary which letter is correct across questions, and ensure all options look equally plausible.""",
-                }
-            ],
-            max_tokens=3000,
-            model=GPT_MODEL_ADVANCED,
-        )
+        },
+    ]
 
-        return summary, quiz
+    logger.info("Generating summary and quiz...")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        summary_future = executor.submit(_call_openai_api, summary_messages, 4000, actual_model)
+        quiz_future = executor.submit(_call_openai_api, quiz_messages, 3000, actual_model)
+        summary = summary_future.result()
+        quiz = quiz_future.result()
 
-    except openai.AuthenticationError:
-        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
-    except openai.RateLimitError:
-        raise APIError(
-            "OpenAI API rate limit exceeded after multiple retries. Please try again later."
-        )
-    except openai.APIConnectionError:
-        raise APIError(
-            "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
-        )
-    except openai.APIError as e:
-        raise APIError(f"OpenAI API error: {e}") from e
+    return summary, quiz
+
+
+# --- Pipeline ---
+
+
+@dataclass
+class ProcessingResult:
+    """Result of processing a video through the full pipeline."""
+
+    video_id: str
+    video_title: str
+    transcript_raw: str
+    transcript: str
+    summary: str
+    quiz: str
+    audio_path: Path | None = None
+
+
+def process_video(
+    url: str,
+    model: str = "small",
+    work_dir: Path | None = None,
+    gpt_model: str | None = None,
+    gpt_model_advanced: str | None = None,
+    video_id: str | None = None,
+    video_title: str | None = None,
+) -> ProcessingResult:
+    """
+    Run the full video processing pipeline.
+
+    Downloads audio, transcribes locally with Whisper, beautifies the transcript,
+    and generates a summary and quiz using GPT.
+
+    Args:
+        url: YouTube video URL.
+        model: Whisper model name (tiny, small, large-v3).
+        work_dir: Directory for intermediate files. Uses a temp dir if None.
+        gpt_model: Override GPT model for beautification.
+        gpt_model_advanced: Override GPT model for summary/quiz.
+        video_id: Pre-computed video ID (avoids re-extraction).
+        video_title: Pre-computed video title (avoids re-fetching).
+
+    Returns:
+        ProcessingResult with all generated content.
+    """
+    if video_id is None:
+        video_id = extract_video_id(url)
+    if video_title is None:
+        video_title = get_video_title(url)
+    logger.info(f"Video: {video_title}")
+
+    if work_dir is None:
+        work_dir = Path(tempfile.mkdtemp())
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    audio_file = download_audio(url, work_dir)
+    raw_transcript = transcribe_audio(audio_file, model)
+    transcript = beautify_transcript(raw_transcript, video_title, model=gpt_model)
+    summary, quiz = generate_summary_and_quiz(transcript, video_title, model=gpt_model_advanced)
+
+    return ProcessingResult(
+        video_id=video_id,
+        video_title=video_title,
+        transcript_raw=raw_transcript,
+        transcript=transcript,
+        summary=summary,
+        quiz=quiz,
+        audio_path=audio_file,
+    )
 
 
 def main():
@@ -614,6 +687,16 @@ Examples:
         action="store_true",
         help="Keep the downloaded audio file instead of deleting it",
     )
+    parser.add_argument(
+        "--gpt-model",
+        default=None,
+        help=f"GPT model for transcript beautification (default: {GPT_MODEL})",
+    )
+    parser.add_argument(
+        "--gpt-model-advanced",
+        default=None,
+        help=f"GPT model for summary/quiz generation (default: {GPT_MODEL_ADVANCED})",
+    )
     args = parser.parse_args()
 
     # Set up logging
@@ -626,55 +709,54 @@ Examples:
             logger.error("Export it with: export OPENAI_API_KEY='your-key-here'")
             sys.exit(1)
 
-        # Extract video info
         logger.info(f"Processing: {args.url}")
+
+        # Extract video info for output directory naming
         video_id = extract_video_id(args.url)
         video_title = get_video_title(args.url)
-        logger.info(f"Video: {video_title}")
-
-        # Create output directory
         folder_name = f"{video_id}_{slugify(video_title)}"
         output_path = args.output_dir / folder_name
-        output_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Output folder: {output_path}")
 
-        # Download audio
-        audio_file = download_audio(args.url, output_path)
-
-        # Transcribe
-        raw_transcript = transcribe_audio(audio_file, args.model)
+        # Run the pipeline, passing pre-computed info to avoid duplicate work
+        result = process_video(
+            args.url,
+            args.model,
+            work_dir=output_path,
+            gpt_model=args.gpt_model,
+            gpt_model_advanced=args.gpt_model_advanced,
+            video_id=video_id,
+            video_title=video_title,
+        )
 
         # Save raw transcript for reference
         raw_transcript_file = output_path / "transcript_raw.md"
-        raw_transcript_file.write_text(f"# Raw Transcript: {video_title}\n\n{raw_transcript}\n")
+        raw_transcript_file.write_text(
+            f"# Raw Transcript: {result.video_title}\n\n{result.transcript_raw}\n"
+        )
         logger.debug(f"Saved raw transcript: {raw_transcript_file}")
-
-        # Beautify transcript
-        transcript = beautify_transcript(raw_transcript, video_title)
 
         # Save beautified transcript
         transcript_file = output_path / "transcript.md"
-        transcript_file.write_text(f"# Transcript: {video_title}\n\n{transcript}\n")
+        transcript_file.write_text(
+            f"# Transcript: {result.video_title}\n\n{result.transcript}\n"
+        )
         logger.info(f"Saved: {transcript_file}")
-
-        # Generate summary and quiz (using beautified transcript)
-        summary, quiz = generate_summary_and_quiz(transcript, video_title)
 
         # Save summary
         summary_file = output_path / "summary.md"
-        summary_file.write_text(f"# Summary: {video_title}\n\n{summary}\n")
+        summary_file.write_text(f"# Summary: {result.video_title}\n\n{result.summary}\n")
         logger.info(f"Saved: {summary_file}")
 
         # Save quiz
         quiz_file = output_path / "quiz.md"
-        quiz_file.write_text(f"# Quiz: {video_title}\n\n{quiz}\n")
+        quiz_file.write_text(f"# Quiz: {result.video_title}\n\n{result.quiz}\n")
         logger.info(f"Saved: {quiz_file}")
 
         # Clean up audio file (unless user wants to keep it)
         if args.keep_audio:
-            logger.info(f"Audio file kept: {audio_file}")
-        else:
-            audio_file.unlink()
+            logger.info(f"Audio file kept: {result.audio_path}")
+        elif result.audio_path and result.audio_path.exists():
+            result.audio_path.unlink()
             logger.debug("Cleaned up temporary audio file")
 
         logger.info(f"\nDone! Files saved to: {output_path}")

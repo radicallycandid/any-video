@@ -9,9 +9,12 @@ import pytest
 from any_video import (
     APIError,
     DownloadError,
+    ProcessingResult,
     TranscriptionError,
+    _split_into_chunks,
     beautify_transcript,
     extract_video_id,
+    process_video,
     retry_with_backoff,
     slugify,
     truncate_transcript,
@@ -146,6 +149,75 @@ class TestTruncateTranscript:
         result, was_truncated = truncate_transcript(transcript)
         assert result == transcript
         assert was_truncated is False
+
+
+class TestSplitIntoChunks:
+    """Tests for _split_into_chunks function."""
+
+    def test_short_text_single_chunk(self):
+        """Test that short text returns a single chunk."""
+        text = "Short text."
+        chunks = _split_into_chunks(text, chunk_size=100)
+        assert chunks == [text]
+
+    def test_exact_size_single_chunk(self):
+        """Test that text at exactly chunk_size returns a single chunk."""
+        text = "A" * 100
+        chunks = _split_into_chunks(text, chunk_size=100)
+        assert chunks == [text]
+
+    def test_splits_at_sentence_boundary(self):
+        """Test that chunks split at sentence boundaries when possible."""
+        text = "First sentence. Second sentence. Third sentence. Fourth sentence."
+        chunks = _split_into_chunks(text, chunk_size=35)
+        assert len(chunks) >= 2
+        # First chunk should end at a sentence boundary
+        assert chunks[0].rstrip().endswith(".")
+
+    def test_all_content_preserved(self):
+        """Test that joining chunks reproduces the original text."""
+        text = "A" * 50 + ". " + "B" * 50 + ". " + "C" * 50
+        chunks = _split_into_chunks(text, chunk_size=60)
+        assert len(chunks) >= 2
+        rejoined = "".join(chunks)
+        assert rejoined == text
+
+    def test_empty_string(self):
+        """Test that empty string returns single empty chunk."""
+        chunks = _split_into_chunks("", chunk_size=100)
+        assert chunks == [""]
+
+
+class TestProcessingResult:
+    """Tests for ProcessingResult dataclass."""
+
+    def test_creation(self):
+        """Test basic dataclass creation."""
+        result = ProcessingResult(
+            video_id="abc123",
+            video_title="Test Video",
+            transcript_raw="raw text",
+            transcript="clean text",
+            summary="summary text",
+            quiz="quiz text",
+        )
+        assert result.video_id == "abc123"
+        assert result.audio_path is None
+
+    def test_with_audio_path(self):
+        """Test creation with audio_path."""
+        from pathlib import Path
+
+        result = ProcessingResult(
+            video_id="abc123",
+            video_title="Test",
+            transcript_raw="raw",
+            transcript="clean",
+            summary="summary",
+            quiz="quiz",
+            audio_path=Path("/tmp/audio.mp3"),
+        )
+        assert result.audio_path == Path("/tmp/audio.mp3")
 
 
 class TestRetryWithBackoff:
@@ -426,3 +498,148 @@ class TestBeautifyTranscript:
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert "transcript editor" in messages[0]["content"].lower()
+
+
+class TestProcessVideo:
+    """Tests for the process_video pipeline function."""
+
+    @patch("any_video.generate_summary_and_quiz")
+    @patch("any_video.beautify_transcript")
+    @patch("any_video.transcribe_audio")
+    @patch("any_video.download_audio")
+    @patch("any_video.get_video_title")
+    @patch("any_video.extract_video_id")
+    def test_full_pipeline(
+        self,
+        mock_extract,
+        mock_title,
+        mock_download,
+        mock_transcribe,
+        mock_beautify,
+        mock_summary_quiz,
+        tmp_path,
+    ):
+        """Test that process_video orchestrates all steps and returns ProcessingResult."""
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+        mock_download.return_value = tmp_path / "audio.mp3"
+        mock_transcribe.return_value = "raw transcript"
+        mock_beautify.return_value = "clean transcript"
+        mock_summary_quiz.return_value = ("the summary", "the quiz")
+
+        result = process_video("https://youtube.com/watch?v=abc123", work_dir=tmp_path)
+
+        assert isinstance(result, ProcessingResult)
+        assert result.video_id == "abc123"
+        assert result.video_title == "Test Video"
+        assert result.transcript_raw == "raw transcript"
+        assert result.transcript == "clean transcript"
+        assert result.summary == "the summary"
+        assert result.quiz == "the quiz"
+        assert result.audio_path == tmp_path / "audio.mp3"
+
+        mock_download.assert_called_once_with("https://youtube.com/watch?v=abc123", tmp_path)
+        mock_transcribe.assert_called_once_with(tmp_path / "audio.mp3", "small")
+        mock_beautify.assert_called_once_with("raw transcript", "Test Video", model=None)
+        mock_summary_quiz.assert_called_once_with("clean transcript", "Test Video", model=None)
+
+    @patch("any_video.generate_summary_and_quiz")
+    @patch("any_video.beautify_transcript")
+    @patch("any_video.transcribe_audio")
+    @patch("any_video.download_audio")
+    def test_uses_precomputed_video_info(
+        self, mock_download, mock_transcribe, mock_beautify, mock_summary_quiz, tmp_path
+    ):
+        """Test that pre-computed video_id and video_title skip extraction."""
+        mock_download.return_value = tmp_path / "audio.mp3"
+        mock_transcribe.return_value = "raw"
+        mock_beautify.return_value = "clean"
+        mock_summary_quiz.return_value = ("s", "q")
+
+        result = process_video(
+            "https://youtube.com/watch?v=abc123",
+            work_dir=tmp_path,
+            video_id="pre_id",
+            video_title="Pre Title",
+        )
+
+        assert result.video_id == "pre_id"
+        assert result.video_title == "Pre Title"
+
+    @patch("any_video.generate_summary_and_quiz")
+    @patch("any_video.beautify_transcript")
+    @patch("any_video.transcribe_audio")
+    @patch("any_video.download_audio")
+    @patch("any_video.get_video_title")
+    @patch("any_video.extract_video_id")
+    def test_passes_gpt_model_overrides(
+        self,
+        mock_extract,
+        mock_title,
+        mock_download,
+        mock_transcribe,
+        mock_beautify,
+        mock_summary_quiz,
+        tmp_path,
+    ):
+        """Test that gpt_model and gpt_model_advanced are forwarded."""
+        mock_extract.return_value = "id"
+        mock_title.return_value = "title"
+        mock_download.return_value = tmp_path / "audio.mp3"
+        mock_transcribe.return_value = "raw"
+        mock_beautify.return_value = "clean"
+        mock_summary_quiz.return_value = ("s", "q")
+
+        process_video(
+            "https://youtube.com/watch?v=id",
+            work_dir=tmp_path,
+            gpt_model="gpt-4o",
+            gpt_model_advanced="o3",
+        )
+
+        mock_beautify.assert_called_once_with("raw", "title", model="gpt-4o")
+        mock_summary_quiz.assert_called_once_with("clean", "title", model="o3")
+
+    @patch("any_video.generate_summary_and_quiz")
+    @patch("any_video.beautify_transcript")
+    @patch("any_video.transcribe_audio")
+    @patch("any_video.download_audio")
+    @patch("any_video.get_video_title")
+    @patch("any_video.extract_video_id")
+    def test_creates_work_dir_when_none(
+        self,
+        mock_extract,
+        mock_title,
+        mock_download,
+        mock_transcribe,
+        mock_beautify,
+        mock_summary_quiz,
+        tmp_path,
+    ):
+        """Test that a temp dir is created when work_dir is None."""
+        mock_extract.return_value = "id"
+        mock_title.return_value = "title"
+        mock_download.return_value = tmp_path / "audio.mp3"
+        mock_transcribe.return_value = "raw"
+        mock_beautify.return_value = "clean"
+        mock_summary_quiz.return_value = ("s", "q")
+
+        result = process_video("https://youtube.com/watch?v=id")
+
+        assert result.video_id == "id"
+        # download_audio was called with some directory (the auto-created temp dir)
+        call_args = mock_download.call_args
+        work_dir_used = call_args[0][1]
+        assert work_dir_used.exists()
+
+    @patch("any_video.download_audio")
+    @patch("any_video.get_video_title")
+    @patch("any_video.extract_video_id")
+    def test_propagates_download_error(self, mock_extract, mock_title, mock_download, tmp_path):
+        """Test that DownloadError propagates from the pipeline."""
+        mock_extract.return_value = "id"
+        mock_title.return_value = "title"
+        mock_download.side_effect = DownloadError("download failed")
+
+        with pytest.raises(DownloadError, match="download failed"):
+            process_video("https://youtube.com/watch?v=id", work_dir=tmp_path)
