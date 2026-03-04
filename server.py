@@ -118,7 +118,7 @@ def process_video_endpoint():
         return jsonify({"success": False, "error": str(e)}), 400
     except (DownloadError, TranscriptionError, APIError) as e:
         return jsonify({"success": False, "error": str(e)}), 500
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         return jsonify({"success": False, "error": f"Unexpected error: {e}"}), 500
 
 

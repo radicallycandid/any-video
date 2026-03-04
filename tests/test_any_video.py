@@ -415,7 +415,7 @@ class TestTranscribeAudio:
         fake_audio.write_bytes(b"fake")
 
         with patch("any_video.whisper.load_model") as mock_load:
-            mock_load.side_effect = Exception("Model loading failed")
+            mock_load.side_effect = RuntimeError("Model loading failed")
             with pytest.raises(TranscriptionError, match="Transcription failed"):
                 transcribe_audio(fake_audio, "small")
 

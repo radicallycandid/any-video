@@ -308,7 +308,7 @@ def transcribe_audio(audio_path: Path, model_name: str) -> str:
         result = model.transcribe(str(audio_path), verbose=False)
         logger.info("Transcription complete.")
         return result["text"]
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         raise TranscriptionError(f"Transcription failed: {e}") from e
 
 
