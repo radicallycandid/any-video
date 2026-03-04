@@ -1,6 +1,7 @@
 """Tests for the Flask server."""
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -244,6 +245,56 @@ class TestProcessEndpoint:
 
         call_args = mock_process.call_args
         assert call_args[0][1] == "small"  # second positional arg is model
+
+    @patch("server.process_video")
+    def test_keep_audio_moves_file(self, mock_process, client, tmp_path):
+        """Test that keep_audio=true moves audio to persistent location."""
+        import server as server_mod
+
+        # Create a fake audio file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        audio_file = work_dir / "audio.mp3"
+        audio_file.write_bytes(b"fake audio data")
+
+        mock_process.return_value = ProcessingResult(
+            video_id="abc123",
+            video_title="Test Video",
+            transcript_raw="raw",
+            transcript="clean",
+            summary="summary",
+            quiz="quiz",
+            audio_path=audio_file,
+        )
+
+        # Redirect server's output directory to tmp_path
+        original_file = server_mod.__file__
+        server_mod.__file__ = str(tmp_path / "server.py")
+
+        try:
+            with patch.dict("os.environ", {"OPENAI_API_KEY": "key"}):
+                response = client.post(
+                    "/process",
+                    data=json.dumps(
+                        {
+                            "url": "https://youtube.com/watch?v=abc123",
+                            "keep_audio": True,
+                        }
+                    ),
+                    content_type="application/json",
+                )
+        finally:
+            server_mod.__file__ = original_file
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["success"] is True
+        assert "audio_path" in data
+        assert "abc123" in data["audio_path"]
+
+        # Audio file should have been moved
+        assert not audio_file.exists()
+        assert Path(data["audio_path"]).exists()
 
 
 class TestRateLimiting:

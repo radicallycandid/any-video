@@ -46,10 +46,12 @@ setup_logging(verbose=True)
 def health():
     """Health check endpoint."""
     has_api_key = bool(os.environ.get("OPENAI_API_KEY"))
-    return jsonify({
-        "status": "ok",
-        "openai_configured": has_api_key,
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "openai_configured": has_api_key,
+        }
+    )
 
 
 @app.route("/process", methods=["POST"])
@@ -88,17 +90,16 @@ def process_video_endpoint():
 
     # Validate model choice
     if model not in ("tiny", "small", "large-v3"):
-        return jsonify({
-            "success": False,
-            "error": f"Invalid model '{model}'. Choose from: tiny, small, large-v3"
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "error": f"Invalid model '{model}'. Choose from: tiny, small, large-v3",
+            }
+        ), 400
 
     # Check for API key
     if not os.environ.get("OPENAI_API_KEY"):
-        return jsonify({
-            "success": False,
-            "error": "OPENAI_API_KEY not set on server"
-        }), 500
+        return jsonify({"success": False, "error": "OPENAI_API_KEY not set on server"}), 500
 
     try:
         with tempfile.TemporaryDirectory() as temp_dir:

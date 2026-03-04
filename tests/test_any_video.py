@@ -1,6 +1,8 @@
 """Tests for any_video module."""
 
+import logging
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,8 +207,6 @@ class TestProcessingResult:
 
     def test_with_audio_path(self):
         """Test creation with audio_path."""
-        from pathlib import Path
-
         result = ProcessingResult(
             video_id="abc123",
             video_title="Test",
@@ -334,30 +334,30 @@ class TestExceptions:
 class TestGetVideoTitle:
     """Tests for get_video_title function (mocked)."""
 
-    @patch("any_video.subprocess.run")
+    @patch("any_video.downloader.subprocess.run")
     def test_successful_title_fetch(self, mock_run):
         """Test successful video title retrieval."""
-        from any_video import get_video_title
+        from any_video.downloader import get_video_title
 
         mock_run.return_value = MagicMock(stdout="Test Video Title\n")
         result = get_video_title("https://youtube.com/watch?v=test")
         assert result == "Test Video Title"
 
-    @patch("any_video.subprocess.run")
+    @patch("any_video.downloader.subprocess.run")
     def test_title_fetch_timeout(self, mock_run):
         """Test timeout handling."""
         from subprocess import TimeoutExpired
 
-        from any_video import get_video_title
+        from any_video.downloader import get_video_title
 
         mock_run.side_effect = TimeoutExpired("yt-dlp", 30)
         with pytest.raises(DownloadError, match="Timed out"):
             get_video_title("https://youtube.com/watch?v=test")
 
-    @patch("any_video.get_yt_dlp_path")
+    @patch("any_video.downloader.get_yt_dlp_path")
     def test_ytdlp_not_found(self, mock_get_path):
         """Test handling when yt-dlp is not installed."""
-        from any_video import get_video_title
+        from any_video.downloader import get_video_title
 
         mock_get_path.side_effect = DownloadError(
             "yt-dlp not found. Install it with: pip install yt-dlp"
@@ -369,10 +369,10 @@ class TestGetVideoTitle:
 class TestDownloadAudio:
     """Tests for download_audio function (mocked)."""
 
-    @patch("any_video.subprocess.run")
+    @patch("any_video.downloader.subprocess.run")
     def test_successful_download(self, mock_run, tmp_path):
         """Test successful audio download."""
-        from any_video import download_audio
+        from any_video.downloader import download_audio
 
         # Create a fake audio file
         audio_file = tmp_path / "audio.mp3"
@@ -382,21 +382,21 @@ class TestDownloadAudio:
         result = download_audio("https://youtube.com/watch?v=test", tmp_path)
         assert result == audio_file
 
-    @patch("any_video.subprocess.run")
+    @patch("any_video.downloader.subprocess.run")
     def test_download_timeout(self, mock_run, tmp_path):
         """Test download timeout handling."""
         from subprocess import TimeoutExpired
 
-        from any_video import download_audio
+        from any_video.downloader import download_audio
 
         mock_run.side_effect = TimeoutExpired("yt-dlp", 600)
         with pytest.raises(DownloadError, match="timed out"):
             download_audio("https://youtube.com/watch?v=test", tmp_path)
 
-    @patch("any_video.subprocess.run")
+    @patch("any_video.downloader.subprocess.run")
     def test_download_file_not_created(self, mock_run, tmp_path):
         """Test handling when download succeeds but file not created."""
-        from any_video import download_audio
+        from any_video.downloader import download_audio
 
         mock_run.return_value = MagicMock()
         # Don't create the file
@@ -409,12 +409,12 @@ class TestTranscribeAudio:
 
     def test_transcription_failure(self, tmp_path):
         """Test error when Whisper transcription fails."""
-        from any_video import transcribe_audio
+        from any_video.transcriber import transcribe_audio
 
         fake_audio = tmp_path / "audio.mp3"
         fake_audio.write_bytes(b"fake")
 
-        with patch("any_video.whisper.load_model") as mock_load:
+        with patch("any_video.transcriber.whisper.load_model") as mock_load:
             mock_load.side_effect = RuntimeError("Model loading failed")
             with pytest.raises(TranscriptionError, match="Transcription failed"):
                 transcribe_audio(fake_audio, "small")
@@ -425,7 +425,7 @@ class TestGenerateSummaryAndQuiz:
 
     def test_missing_api_key(self):
         """Test error when API key is not set."""
-        from any_video import generate_summary_and_quiz
+        from any_video.openai_client import generate_summary_and_quiz
 
         with (
             patch.dict("os.environ", {}, clear=True),
@@ -433,10 +433,10 @@ class TestGenerateSummaryAndQuiz:
         ):
             generate_summary_and_quiz("transcript", "title")
 
-    @patch("any_video.openai.OpenAI")
+    @patch("any_video.openai_client.openai.OpenAI")
     def test_successful_generation(self, mock_openai_class):
         """Test successful summary and quiz generation."""
-        from any_video import generate_summary_and_quiz
+        from any_video.openai_client import generate_summary_and_quiz
 
         # Mock the OpenAI client
         mock_client = MagicMock()
@@ -466,7 +466,7 @@ class TestBeautifyTranscript:
         ):
             beautify_transcript("raw transcript", "title")
 
-    @patch("any_video.openai.OpenAI")
+    @patch("any_video.openai_client.openai.OpenAI")
     def test_successful_beautification(self, mock_openai_class):
         """Test successful transcript beautification."""
         # Mock the OpenAI client
@@ -484,7 +484,7 @@ class TestBeautifyTranscript:
         assert result == "Beautified transcript"
         assert mock_client.chat.completions.create.call_count == 1
 
-    @patch("any_video.openai.OpenAI")
+    @patch("any_video.openai_client.openai.OpenAI")
     def test_beautification_uses_system_prompt(self, mock_openai_class):
         """Test that beautification uses a system prompt for instructions."""
         mock_client = MagicMock()
@@ -508,12 +508,12 @@ class TestBeautifyTranscript:
 class TestProcessVideo:
     """Tests for the process_video pipeline function."""
 
-    @patch("any_video.generate_summary_and_quiz")
-    @patch("any_video.beautify_transcript")
-    @patch("any_video.transcribe_audio")
-    @patch("any_video.download_audio")
-    @patch("any_video.get_video_title")
-    @patch("any_video.extract_video_id")
+    @patch("any_video.pipeline.generate_summary_and_quiz")
+    @patch("any_video.pipeline.beautify_transcript")
+    @patch("any_video.pipeline.transcribe_audio")
+    @patch("any_video.pipeline.download_audio")
+    @patch("any_video.pipeline.get_video_title")
+    @patch("any_video.pipeline.extract_video_id")
     def test_full_pipeline(
         self,
         mock_extract,
@@ -548,10 +548,10 @@ class TestProcessVideo:
         mock_beautify.assert_called_once_with("raw transcript", "Test Video", model=None)
         mock_summary_quiz.assert_called_once_with("clean transcript", "Test Video", model=None)
 
-    @patch("any_video.generate_summary_and_quiz")
-    @patch("any_video.beautify_transcript")
-    @patch("any_video.transcribe_audio")
-    @patch("any_video.download_audio")
+    @patch("any_video.pipeline.generate_summary_and_quiz")
+    @patch("any_video.pipeline.beautify_transcript")
+    @patch("any_video.pipeline.transcribe_audio")
+    @patch("any_video.pipeline.download_audio")
     def test_uses_precomputed_video_info(
         self, mock_download, mock_transcribe, mock_beautify, mock_summary_quiz, tmp_path
     ):
@@ -571,12 +571,12 @@ class TestProcessVideo:
         assert result.video_id == "pre_id"
         assert result.video_title == "Pre Title"
 
-    @patch("any_video.generate_summary_and_quiz")
-    @patch("any_video.beautify_transcript")
-    @patch("any_video.transcribe_audio")
-    @patch("any_video.download_audio")
-    @patch("any_video.get_video_title")
-    @patch("any_video.extract_video_id")
+    @patch("any_video.pipeline.generate_summary_and_quiz")
+    @patch("any_video.pipeline.beautify_transcript")
+    @patch("any_video.pipeline.transcribe_audio")
+    @patch("any_video.pipeline.download_audio")
+    @patch("any_video.pipeline.get_video_title")
+    @patch("any_video.pipeline.extract_video_id")
     def test_passes_gpt_model_overrides(
         self,
         mock_extract,
@@ -605,12 +605,12 @@ class TestProcessVideo:
         mock_beautify.assert_called_once_with("raw", "title", model="gpt-4o")
         mock_summary_quiz.assert_called_once_with("clean", "title", model="o3")
 
-    @patch("any_video.generate_summary_and_quiz")
-    @patch("any_video.beautify_transcript")
-    @patch("any_video.transcribe_audio")
-    @patch("any_video.download_audio")
-    @patch("any_video.get_video_title")
-    @patch("any_video.extract_video_id")
+    @patch("any_video.pipeline.generate_summary_and_quiz")
+    @patch("any_video.pipeline.beautify_transcript")
+    @patch("any_video.pipeline.transcribe_audio")
+    @patch("any_video.pipeline.download_audio")
+    @patch("any_video.pipeline.get_video_title")
+    @patch("any_video.pipeline.extract_video_id")
     def test_creates_work_dir_when_none(
         self,
         mock_extract,
@@ -637,9 +637,9 @@ class TestProcessVideo:
         work_dir_used = call_args[0][1]
         assert work_dir_used.exists()
 
-    @patch("any_video.download_audio")
-    @patch("any_video.get_video_title")
-    @patch("any_video.extract_video_id")
+    @patch("any_video.pipeline.download_audio")
+    @patch("any_video.pipeline.get_video_title")
+    @patch("any_video.pipeline.extract_video_id")
     def test_propagates_download_error(self, mock_extract, mock_title, mock_download, tmp_path):
         """Test that DownloadError propagates from the pipeline."""
         mock_extract.return_value = "id"
@@ -648,3 +648,318 @@ class TestProcessVideo:
 
         with pytest.raises(DownloadError, match="download failed"):
             process_video("https://youtube.com/watch?v=id", work_dir=tmp_path)
+
+
+class TestSetupLogging:
+    """Tests for setup_logging function."""
+
+    def setup_method(self):
+        """Clear logger handlers before each test."""
+        logger = logging.getLogger("any-video")
+        logger.handlers.clear()
+
+    def test_sets_info_level_by_default(self):
+        """Test that default logging level is INFO."""
+        from any_video.config import setup_logging
+
+        setup_logging()
+        logger = logging.getLogger("any-video")
+        assert logger.level == logging.INFO
+        assert len(logger.handlers) == 1
+
+    def test_sets_debug_level_when_verbose(self):
+        """Test that verbose=True sets DEBUG level."""
+        from any_video.config import setup_logging
+
+        setup_logging(verbose=True)
+        logger = logging.getLogger("any-video")
+        assert logger.level == logging.DEBUG
+
+    def test_no_duplicate_handlers(self):
+        """Test that repeated calls don't add duplicate handlers."""
+        from any_video.config import setup_logging
+
+        setup_logging()
+        setup_logging()
+        setup_logging()
+        logger = logging.getLogger("any-video")
+        assert len(logger.handlers) == 1
+
+
+class TestGetYtDlpPath:
+    """Tests for get_yt_dlp_path function."""
+
+    def setup_method(self):
+        """Clear the cache before each test."""
+        from any_video.downloader import get_yt_dlp_path
+
+        get_yt_dlp_path.cache_clear()
+
+    @patch("any_video.downloader.sys")
+    def test_finds_in_venv_bin(self, mock_sys, tmp_path):
+        """Test finding yt-dlp in the Python interpreter's directory."""
+        from any_video.downloader import get_yt_dlp_path
+
+        fake_yt_dlp = tmp_path / "yt-dlp"
+        fake_yt_dlp.touch()
+        mock_sys.executable = str(tmp_path / "python")
+
+        result = get_yt_dlp_path()
+        assert result == str(fake_yt_dlp)
+
+    @patch("shutil.which", return_value="/usr/local/bin/yt-dlp")
+    @patch("any_video.downloader.sys")
+    def test_falls_back_to_system_path(self, mock_sys, mock_which, tmp_path):
+        """Test falling back to PATH when not in venv bin."""
+        from any_video.downloader import get_yt_dlp_path
+
+        mock_sys.executable = str(tmp_path / "python")
+
+        result = get_yt_dlp_path()
+        assert result == "/usr/local/bin/yt-dlp"
+
+    @patch("shutil.which", return_value=None)
+    @patch("any_video.downloader.sys")
+    def test_raises_when_not_found(self, mock_sys, mock_which, tmp_path):
+        """Test DownloadError when yt-dlp is not found anywhere."""
+        from any_video.downloader import get_yt_dlp_path
+
+        mock_sys.executable = str(tmp_path / "python")
+
+        with pytest.raises(DownloadError, match="yt-dlp not found"):
+            get_yt_dlp_path()
+
+
+class TestMain:
+    """Tests for the main CLI entry point."""
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_successful_run(self, mock_extract, mock_title, mock_process, tmp_path):
+        """Test successful CLI execution creates output files."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+
+        output_dir = tmp_path / "output"
+
+        def mock_process_fn(url, model, work_dir=None, **kwargs):
+            if work_dir:
+                work_dir.mkdir(parents=True, exist_ok=True)
+            return ProcessingResult(
+                video_id="abc123",
+                video_title="Test Video",
+                transcript_raw="raw text",
+                transcript="clean text",
+                summary="summary text",
+                quiz="quiz text",
+                audio_path=work_dir / "audio.mp3" if work_dir else None,
+            )
+
+        mock_process.side_effect = mock_process_fn
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+        ):
+            main()
+
+        expected_dir = output_dir / "abc123_test-video"
+        assert (expected_dir / "transcript_raw.md").exists()
+        assert (expected_dir / "transcript.md").exists()
+        assert (expected_dir / "summary.md").exists()
+        assert (expected_dir / "quiz.md").exists()
+
+        # Verify content format
+        content = (expected_dir / "summary.md").read_text()
+        assert content.startswith("# Summary: Test Video")
+        assert "summary text" in content
+
+    def test_missing_api_key_exits(self):
+        """Test that missing API key causes exit with code 1."""
+        from any_video.cli import main
+
+        with (
+            patch("sys.argv", ["any-video", "https://youtube.com/watch?v=abc123"]),
+            patch.dict("os.environ", {}, clear=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code == 1
+
+    @patch("any_video.cli.extract_video_id")
+    def test_invalid_url_exits(self, mock_extract):
+        """Test that invalid URL causes exit with code 1."""
+        from any_video.cli import main
+
+        mock_extract.side_effect = ValueError("Could not extract video ID")
+        with (
+            patch("sys.argv", ["any-video", "not-a-url"]),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "key"}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code == 1
+
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_download_error_exits(self, mock_extract, mock_title):
+        """Test that DownloadError causes exit with code 1."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.side_effect = DownloadError("Video not found")
+        with (
+            patch("sys.argv", ["any-video", "https://youtube.com/watch?v=abc123"]),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "key"}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code == 1
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_api_error_exits(self, mock_extract, mock_title, mock_process):
+        """Test that APIError causes exit with code 1."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test"
+        mock_process.side_effect = APIError("Rate limited")
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    "/tmp/test-output",
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "key"}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code == 1
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_keep_audio_preserves_file(self, mock_extract, mock_title, mock_process, tmp_path):
+        """Test that --keep-audio prevents audio file deletion."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+
+        output_dir = tmp_path / "output"
+
+        def mock_process_fn(url, model, work_dir=None, **kwargs):
+            if work_dir:
+                work_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = work_dir / "audio.mp3"
+            audio_path.write_bytes(b"fake audio")
+            return ProcessingResult(
+                video_id="abc123",
+                video_title="Test Video",
+                transcript_raw="raw",
+                transcript="clean",
+                summary="summary",
+                quiz="quiz",
+                audio_path=audio_path,
+            )
+
+        mock_process.side_effect = mock_process_fn
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    str(output_dir),
+                    "--keep-audio",
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+        ):
+            main()
+
+        # Audio file should still exist
+        expected_dir = output_dir / "abc123_test-video"
+        assert (expected_dir / "audio.mp3").exists()
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_audio_cleaned_up_by_default(self, mock_extract, mock_title, mock_process, tmp_path):
+        """Test that audio file is deleted by default."""
+        from any_video.cli import main
+
+        mock_extract.return_value = "abc123"
+        mock_title.return_value = "Test Video"
+
+        output_dir = tmp_path / "output"
+
+        def mock_process_fn(url, model, work_dir=None, **kwargs):
+            if work_dir:
+                work_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = work_dir / "audio.mp3"
+            audio_path.write_bytes(b"fake audio")
+            return ProcessingResult(
+                video_id="abc123",
+                video_title="Test Video",
+                transcript_raw="raw",
+                transcript="clean",
+                summary="summary",
+                quiz="quiz",
+                audio_path=audio_path,
+            )
+
+        mock_process.side_effect = mock_process_fn
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "any-video",
+                    "https://youtube.com/watch?v=abc123",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+            ),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+        ):
+            main()
+
+        # Audio file should be cleaned up
+        expected_dir = output_dir / "abc123_test-video"
+        assert not (expected_dir / "audio.mp3").exists()
+
+    @patch("any_video.cli.process_video")
+    @patch("any_video.cli.get_video_title")
+    @patch("any_video.cli.extract_video_id")
+    def test_keyboard_interrupt_exits_130(self, mock_extract, mock_title, mock_process):
+        """Test that KeyboardInterrupt causes exit with code 130."""
+        from any_video.cli import main
+
+        mock_extract.side_effect = KeyboardInterrupt()
+        with (
+            patch("sys.argv", ["any-video", "https://youtube.com/watch?v=abc123"]),
+            patch.dict("os.environ", {"OPENAI_API_KEY": "key"}),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+        assert exc_info.value.code == 130

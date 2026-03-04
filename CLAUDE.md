@@ -7,9 +7,20 @@ YouTube video transcriber and learning tool. Downloads videos, transcribes local
 ## Project Structure
 
 ```
-any_video.py          # Main CLI tool (~700 lines)
+any_video/            # Main package
+  __init__.py         # Public API re-exports
+  __main__.py         # python -m any_video entry point
+  cli.py              # CLI argument parsing and output writing
+  config.py           # Constants, logging, retry decorator
+  downloader.py       # yt-dlp integration, URL handling, slugify
+  exceptions.py       # TranscriptionError, APIError, DownloadError
+  openai_client.py    # OpenAI API calls, beautify, summary, quiz
+  pipeline.py         # ProcessingResult, process_video orchestrator
+  transcriber.py      # Whisper transcription
 server.py             # Flask server for Chrome extension
-tests/test_any_video.py  # Test suite (pytest)
+tests/
+  test_any_video.py   # Core module tests (pytest)
+  test_server.py      # Server endpoint tests
 extension/            # Chrome extension (Manifest V3)
   popup.html/js/css   # Extension UI
   manifest.json       # Extension config
