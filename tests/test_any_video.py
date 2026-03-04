@@ -1,7 +1,6 @@
 """Tests for any_video module."""
 
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -360,7 +359,9 @@ class TestGetVideoTitle:
         """Test handling when yt-dlp is not installed."""
         from any_video import get_video_title
 
-        mock_get_path.side_effect = DownloadError("yt-dlp not found. Install it with: pip install yt-dlp")
+        mock_get_path.side_effect = DownloadError(
+            "yt-dlp not found. Install it with: pip install yt-dlp"
+        )
         with pytest.raises(DownloadError, match="yt-dlp not found"):
             get_video_title("https://youtube.com/watch?v=test")
 
@@ -426,9 +427,11 @@ class TestGenerateSummaryAndQuiz:
         """Test error when API key is not set."""
         from any_video import generate_summary_and_quiz
 
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(APIError, match="OPENAI_API_KEY"):
-                generate_summary_and_quiz("transcript", "title")
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            pytest.raises(APIError, match="OPENAI_API_KEY"),
+        ):
+            generate_summary_and_quiz("transcript", "title")
 
     @patch("any_video.openai.OpenAI")
     def test_successful_generation(self, mock_openai_class):
@@ -457,9 +460,11 @@ class TestBeautifyTranscript:
 
     def test_missing_api_key(self):
         """Test error when API key is not set."""
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(APIError, match="OPENAI_API_KEY"):
-                beautify_transcript("raw transcript", "title")
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            pytest.raises(APIError, match="OPENAI_API_KEY"),
+        ):
+            beautify_transcript("raw transcript", "title")
 
     @patch("any_video.openai.OpenAI")
     def test_successful_beautification(self, mock_openai_class):

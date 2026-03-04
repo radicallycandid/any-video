@@ -1,8 +1,7 @@
 """Tests for the Flask server."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -214,8 +213,12 @@ class TestProcessEndpoint:
     def test_default_model_is_small(self, mock_process, client):
         """Test that model defaults to 'small' when not specified."""
         mock_process.return_value = ProcessingResult(
-            video_id="id", video_title="t", transcript_raw="r",
-            transcript="c", summary="s", quiz="q",
+            video_id="id",
+            video_title="t",
+            transcript_raw="r",
+            transcript="c",
+            summary="s",
+            quiz="q",
         )
 
         with patch.dict("os.environ", {"OPENAI_API_KEY": "key"}):

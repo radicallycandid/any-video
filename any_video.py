@@ -23,11 +23,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cache, wraps
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 import openai
 import whisper
@@ -203,8 +204,10 @@ def get_video_title(url: str) -> str:
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         raise DownloadError(f"Failed to get video title: {e.stderr}") from e
-    except subprocess.TimeoutExpired:
-        raise DownloadError("Timed out while fetching video title")
+    except subprocess.TimeoutExpired as e:
+        raise DownloadError("Timed out while fetching video title") from e
+    except FileNotFoundError as e:
+        raise DownloadError("yt-dlp not found. Install it with: pip install yt-dlp") from e
 
 
 def slugify(text: str, max_length: int = 50) -> str:
@@ -262,8 +265,8 @@ def download_audio(url: str, output_path: Path) -> Path:
         )
     except subprocess.CalledProcessError as e:
         raise DownloadError(f"Failed to download audio: {e}") from e
-    except subprocess.TimeoutExpired:
-        raise DownloadError("Download timed out (exceeded 10 minutes)")
+    except subprocess.TimeoutExpired as e:
+        raise DownloadError("Download timed out (exceeded 10 minutes)") from e
 
     if not audio_file.exists():
         raise DownloadError("Audio file was not created")
@@ -294,7 +297,9 @@ def transcribe_audio(audio_path: Path, model_name: str) -> str:
     try:
         model_path = WHISPER_MODELS_DIR / f"{model_name}.pt"
         if not model_path.exists():
-            logger.info(f"Downloading Whisper model '{model_name}' (this may take a few minutes)...")
+            logger.info(
+                f"Downloading Whisper model '{model_name}' (this may take a few minutes)..."
+            )
         else:
             logger.info(f"Loading Whisper model: {model_name}...")
         model = whisper.load_model(model_name, download_root=str(WHISPER_MODELS_DIR))
@@ -348,9 +353,7 @@ def _get_openai_client() -> openai.OpenAI:
     base_delay=RETRY_DELAY,
     exceptions=(openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError),
 )
-def _raw_openai_call(
-    client: openai.OpenAI, messages: list, max_tokens: int, model: str
-) -> str:
+def _raw_openai_call(client: openai.OpenAI, messages: list, max_tokens: int, model: str) -> str:
     """Make a raw OpenAI API call with automatic retry on transient errors."""
     use_new_param = any(model.startswith(p) for p in ("gpt-4.1", "gpt-5", "o1", "o3"))
     token_param = (
@@ -364,9 +367,7 @@ def _raw_openai_call(
     return response.choices[0].message.content
 
 
-def _call_openai_api(
-    messages: list, max_tokens: int, model: str | None = None
-) -> str:
+def _call_openai_api(messages: list, max_tokens: int, model: str | None = None) -> str:
     """
     Make an OpenAI API call with retry logic and error translation.
 
@@ -377,20 +378,20 @@ def _call_openai_api(
     actual_model = model or GPT_MODEL
     try:
         return _raw_openai_call(client, messages, max_tokens, actual_model)
-    except openai.AuthenticationError:
-        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.")
-    except openai.RateLimitError:
+    except openai.AuthenticationError as e:
+        raise APIError("Invalid OpenAI API key. Please check your OPENAI_API_KEY.") from e
+    except openai.RateLimitError as e:
         raise APIError(
             "OpenAI API rate limit exceeded after multiple retries. Please try again later."
-        )
-    except openai.APIConnectionError:
+        ) from e
+    except openai.APIConnectionError as e:
         raise APIError(
             "Failed to connect to OpenAI API after multiple retries. Check your internet connection."
-        )
-    except openai.APITimeoutError:
+        ) from e
+    except openai.APITimeoutError as e:
         raise APIError(
             "OpenAI API request timed out after multiple retries. Please try again later."
-        )
+        ) from e
     except openai.APIError as e:
         raise APIError(f"OpenAI API error: {e}") from e
 
@@ -737,9 +738,7 @@ Examples:
 
         # Save beautified transcript
         transcript_file = output_path / "transcript.md"
-        transcript_file.write_text(
-            f"# Transcript: {result.video_title}\n\n{result.transcript}\n"
-        )
+        transcript_file.write_text(f"# Transcript: {result.video_title}\n\n{result.transcript}\n")
         logger.info(f"Saved: {transcript_file}")
 
         # Save summary
