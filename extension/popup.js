@@ -30,6 +30,7 @@ let currentUrl = null;
 let currentResults = null;
 let currentTab = 'summary';
 let abortController = null;
+let pollIntervalId = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -87,13 +88,8 @@ async function checkCurrentTab() {
 }
 
 function isYouTubeVideo(url) {
-  const patterns = [
-    /youtube\.com\/watch\?v=/,
-    /youtu\.be\//,
-    /youtube\.com\/embed\//,
-    /youtube\.com\/shorts\//,
-  ];
-  return patterns.some(p => p.test(url));
+  // Loose check only — the server's extract_video_id() is the source of truth for validation
+  return url.includes('youtube.com/') || url.includes('youtu.be/');
 }
 
 function truncateUrl(url, maxLength) {
@@ -128,6 +124,7 @@ async function processVideo() {
   progressText.textContent = 'Processing video...';
 
   try {
+    // Start the job
     const response = await fetch(`${SERVER_URL}/process`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -138,8 +135,55 @@ async function processVideo() {
       signal: abortController.signal,
     });
 
+    const startData = await response.json();
+
+    if (!startData.request_id) {
+      clearTimeout(timeoutId);
+      showError(startData.error || 'Unknown error occurred');
+      return;
+    }
+
+    const requestId = startData.request_id;
+
+    // Poll for progress
+    pollIntervalId = setInterval(async () => {
+      try {
+        const progressResponse = await fetch(`${SERVER_URL}/progress/${requestId}`);
+        const progressData = await progressResponse.json();
+        if (progressData.stage) {
+          progressText.textContent = `${progressData.stage}... ${progressData.progress}%`;
+        }
+      } catch (_) {
+        // Ignore polling errors — result fetch will handle failures
+      }
+    }, 2000);
+
+    // Poll for result
+    const pollForResult = async () => {
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        if (abortController?.signal.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        const resultResponse = await fetch(`${SERVER_URL}/result/${requestId}`, {
+          signal: abortController.signal,
+        });
+        const resultData = await resultResponse.json();
+
+        if (resultData.status === 'pending') {
+          continue;
+        }
+
+        return resultData;
+      }
+    };
+
+    const data = await pollForResult();
     clearTimeout(timeoutId);
-    const data = await response.json();
+    clearInterval(pollIntervalId);
+    pollIntervalId = null;
 
     if (data.success) {
       currentResults = data;
@@ -149,6 +193,10 @@ async function processVideo() {
     }
   } catch (e) {
     clearTimeout(timeoutId);
+    if (pollIntervalId) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
     if (e.name === 'AbortError') {
       showError('Request was cancelled.');
     } else {
