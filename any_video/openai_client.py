@@ -106,7 +106,12 @@ def _split_into_chunks(text: str, chunk_size: int = BEAUTIFY_CHUNK_SIZE) -> list
             break
         candidate = remaining[:chunk_size]
         last_period = candidate.rfind(". ")
-        split_at = (last_period + 2) if last_period > chunk_size * 0.8 else chunk_size
+        if last_period > chunk_size * 0.8:
+            split_at = last_period + 2
+        else:
+            # Fall back to word boundary to avoid splitting mid-word
+            last_space = candidate.rfind(" ")
+            split_at = (last_space + 1) if last_space > 0 else chunk_size
         chunks.append(remaining[:split_at])
         remaining = remaining[split_at:]
     return chunks
