@@ -33,14 +33,6 @@ class VideoMetadata:
     slug_title: str
 
 
-@dataclass(frozen=True)
-class ProcessingResult:
-    raw_transcript: str
-    beautified_transcript: str
-    summary: str
-    quiz: str
-
-
 # --- Exceptions ---
 
 
@@ -74,10 +66,10 @@ def slugify(title: str) -> str:
 
 def setup_logging(verbose: bool) -> None:
     """Configure logging based on verbosity."""
-    level = logging.DEBUG if verbose else logging.INFO
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     logger = logging.getLogger("any_video")
-    logger.setLevel(level)
-    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
     logger.propagate = False

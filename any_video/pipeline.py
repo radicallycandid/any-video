@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from any_video.config import OUTPUT_FILES, ProcessingResult, VideoMetadata
+from any_video.config import OUTPUT_FILES
 from any_video.downloader import download_audio, get_video_metadata
 from any_video.openai_client import beautify_transcript, generate_quiz, generate_summary
 from any_video.transcriber import load_model, transcribe
@@ -14,34 +14,20 @@ logger = logging.getLogger("any_video")
 
 
 def find_existing_output(output_dir: Path, video_id: str) -> Path | None:
-    """Check if output for this video ID already exists."""
+    """Check if output for this video ID already exists.
+
+    Returns the most recently modified match if multiple exist.
+    """
     matches = list(output_dir.glob(f"{video_id}_*"))
-    if matches:
-        return matches[0]
-    return None
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
 
 
-def write_output(
-    output_dir: Path,
-    metadata: VideoMetadata,
-    result: ProcessingResult,
-    audio_path: Path | None,
-    keep_audio: bool,
-) -> Path:
-    """Write all processing results to the output directory."""
-    dir_name = f"{metadata.video_id}_{metadata.slug_title}"
-    dest = output_dir / dir_name
-    dest.mkdir(parents=True, exist_ok=True)
-
-    (dest / OUTPUT_FILES["raw_transcript"]).write_text(result.raw_transcript, encoding="utf-8")
-    (dest / OUTPUT_FILES["transcript"]).write_text(result.beautified_transcript, encoding="utf-8")
-    (dest / OUTPUT_FILES["summary"]).write_text(result.summary, encoding="utf-8")
-    (dest / OUTPUT_FILES["quiz"]).write_text(result.quiz, encoding="utf-8")
-
-    if keep_audio and audio_path and audio_path.exists():
-        shutil.copy2(audio_path, dest / OUTPUT_FILES["audio"])
-
-    return dest
+def _is_output_complete(output_path: Path) -> bool:
+    """Check if all expected text output files exist."""
+    required = ["raw_transcript", "transcript", "summary", "quiz"]
+    return all((output_path / OUTPUT_FILES[key]).exists() for key in required)
 
 
 def process(
@@ -53,7 +39,8 @@ def process(
 ) -> Path:
     """Run the full processing pipeline.
 
-    Returns the path to the output directory.
+    Returns the path to the output directory. Intermediate results are persisted
+    so that a failed GPT step can be resumed without re-downloading or re-transcribing.
     """
     # 1. Get metadata (validates URL)
     metadata = get_video_metadata(url)
@@ -62,36 +49,66 @@ def process(
     # 2. Check cache
     existing = find_existing_output(output_dir, metadata.video_id)
     if existing and not force:
-        logger.info("Output already exists: %s", existing)
-        return existing
+        if _is_output_complete(existing):
+            logger.info("Output already exists: %s", existing)
+            return existing
+        logger.info("Resuming incomplete output: %s", existing)
+        dest = existing
+    else:
+        if existing and force:
+            logger.info("Removing existing output (--force): %s", existing)
+            shutil.rmtree(existing)
+        dir_name = f"{metadata.video_id}_{metadata.slug_title}"
+        dest = output_dir / dir_name
+        dest.mkdir(parents=True, exist_ok=True)
 
-    if existing and force:
-        logger.info("Removing existing output (--force): %s", existing)
-        shutil.rmtree(existing)
+    raw_transcript_path = dest / OUTPUT_FILES["raw_transcript"]
 
-    # 3. Download audio to temp dir
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        audio_path = download_audio(url, tmp_path)
+    # 3. Download and transcribe (skip if raw transcript already persisted)
+    if raw_transcript_path.exists():
+        logger.info("Found existing raw transcript, skipping download and transcription")
+        raw_transcript = raw_transcript_path.read_text(encoding="utf-8")
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            logger.info("[1/5] Downloading audio...")
+            audio_path = download_audio(url, tmp_path)
 
-        # 4. Transcribe
-        whisper_model = load_model(model_name)
-        raw_transcript = transcribe(whisper_model, audio_path)
+            logger.info("[2/5] Transcribing audio...")
+            whisper_model = load_model(model_name)
+            raw_transcript = transcribe(whisper_model, audio_path)
 
-        # 5. GPT processing
+            # Persist raw transcript immediately so it survives GPT failures
+            raw_transcript_path.write_text(raw_transcript, encoding="utf-8")
+
+            if keep_audio:
+                shutil.copy2(audio_path, dest / OUTPUT_FILES["audio"])
+
+    # 4. GPT processing — each result written immediately, skip if already done
+    transcript_path = dest / OUTPUT_FILES["transcript"]
+    if transcript_path.exists():
+        logger.info("[3/5] Beautified transcript already exists, skipping")
+        beautified = transcript_path.read_text(encoding="utf-8")
+    else:
+        logger.info("[3/5] Beautifying transcript...")
         beautified = beautify_transcript(raw_transcript)
+        transcript_path.write_text(beautified, encoding="utf-8")
+
+    summary_path = dest / OUTPUT_FILES["summary"]
+    if summary_path.exists():
+        logger.info("[4/5] Summary already exists, skipping")
+    else:
+        logger.info("[4/5] Generating summary...")
         summary = generate_summary(beautified)
+        summary_path.write_text(summary, encoding="utf-8")
+
+    quiz_path = dest / OUTPUT_FILES["quiz"]
+    if quiz_path.exists():
+        logger.info("[5/5] Quiz already exists, skipping")
+    else:
+        logger.info("[5/5] Generating quiz...")
         quiz = generate_quiz(beautified)
+        quiz_path.write_text(quiz, encoding="utf-8")
 
-        result = ProcessingResult(
-            raw_transcript=raw_transcript,
-            beautified_transcript=beautified,
-            summary=summary,
-            quiz=quiz,
-        )
-
-        # 6. Write output
-        output_path = write_output(output_dir, metadata, result, audio_path, keep_audio)
-
-    logger.info("Output written to: %s", output_path)
-    return output_path
+    logger.info("Output written to: %s", dest)
+    return dest

@@ -63,7 +63,7 @@ def download_audio(url: str, output_path: Path) -> Path:
         "quiet": True,
         "no_warnings": True,
     }
-    logger.info("Downloading audio...")
+    logger.debug("Downloading audio...")
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])

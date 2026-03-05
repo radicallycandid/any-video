@@ -2,8 +2,8 @@
 
 from unittest.mock import patch
 
-from any_video.config import ProcessingResult, VideoMetadata
-from any_video.pipeline import find_existing_output, process, write_output
+from any_video.config import VideoMetadata
+from any_video.pipeline import find_existing_output, process
 
 
 class TestFindExistingOutput:
@@ -16,42 +16,19 @@ class TestFindExistingOutput:
     def test_returns_none_when_missing(self, tmp_path):
         assert find_existing_output(tmp_path, "abc123") is None
 
+    def test_returns_most_recent_when_multiple(self, tmp_path):
+        """When multiple dirs match (e.g., after title change), return most recent."""
+        old_dir = tmp_path / "abc123_old-title"
+        old_dir.mkdir()
+        # Touch a file so mtime differs
+        (old_dir / "marker").write_text("old")
 
-class TestWriteOutput:
-    def test_writes_all_files(self, tmp_path):
-        metadata = VideoMetadata(video_id="abc123", title="Test", slug_title="test")
-        result = ProcessingResult(
-            raw_transcript="raw text",
-            beautified_transcript="clean text",
-            summary="summary text",
-            quiz="quiz text",
-        )
+        new_dir = tmp_path / "abc123_new-title"
+        new_dir.mkdir()
+        (new_dir / "marker").write_text("new")
 
-        output_path = write_output(tmp_path, metadata, result, audio_path=None, keep_audio=False)
-
-        assert output_path.name == "abc123_test"
-        assert (output_path / "transcript_raw.md").read_text() == "raw text"
-        assert (output_path / "transcript.md").read_text() == "clean text"
-        assert (output_path / "summary.md").read_text() == "summary text"
-        assert (output_path / "quiz.md").read_text() == "quiz text"
-        assert not (output_path / "audio.mp3").exists()
-
-    def test_copies_audio_when_keep_audio(self, tmp_path):
-        metadata = VideoMetadata(video_id="abc123", title="Test", slug_title="test")
-        result = ProcessingResult(
-            raw_transcript="raw",
-            beautified_transcript="clean",
-            summary="summary",
-            quiz="quiz",
-        )
-        audio_file = tmp_path / "source_audio.mp3"
-        audio_file.write_text("fake audio data")
-
-        output_path = write_output(
-            tmp_path, metadata, result, audio_path=audio_file, keep_audio=True
-        )
-
-        assert (output_path / "audio.mp3").exists()
+        result = find_existing_output(tmp_path, "abc123")
+        assert result == new_dir
 
 
 class TestProcess:
@@ -99,6 +76,11 @@ class TestProcess:
         )
         existing = tmp_path / "abc123_test"
         existing.mkdir()
+        # Create all required output files to simulate complete output
+        (existing / "transcript_raw.md").write_text("raw")
+        (existing / "transcript.md").write_text("clean")
+        (existing / "summary.md").write_text("summary")
+        (existing / "quiz.md").write_text("quiz")
 
         result = process(
             url="https://www.youtube.com/watch?v=abc123",
@@ -109,6 +91,64 @@ class TestProcess:
         )
 
         assert result == existing
+
+    @patch("any_video.pipeline.beautify_transcript", return_value="beautified")
+    @patch("any_video.pipeline.generate_summary", return_value="summary")
+    @patch("any_video.pipeline.generate_quiz", return_value="quiz")
+    @patch("any_video.pipeline.get_video_metadata")
+    def test_resumes_incomplete_output(
+        self, mock_metadata, mock_quiz, mock_summary, mock_beautify, tmp_path
+    ):
+        """If raw transcript exists but GPT outputs don't, resume from GPT step."""
+        mock_metadata.return_value = VideoMetadata(
+            video_id="abc123", title="Test", slug_title="test"
+        )
+        existing = tmp_path / "abc123_test"
+        existing.mkdir()
+        (existing / "transcript_raw.md").write_text("raw transcript")
+
+        result = process(
+            url="https://www.youtube.com/watch?v=abc123",
+            model_name="small",
+            output_dir=tmp_path,
+            keep_audio=False,
+            force=False,
+        )
+
+        assert (result / "transcript.md").read_text() == "beautified"
+        assert (result / "summary.md").read_text() == "summary"
+        assert (result / "quiz.md").read_text() == "quiz"
+        mock_beautify.assert_called_once_with("raw transcript")
+
+    @patch("any_video.pipeline.generate_quiz", return_value="quiz")
+    @patch("any_video.pipeline.generate_summary", return_value="summary")
+    @patch("any_video.pipeline.get_video_metadata")
+    def test_skips_completed_gpt_steps_on_resume(
+        self, mock_metadata, mock_summary, mock_quiz, tmp_path
+    ):
+        """If beautify already done but summary/quiz missing, skip beautify."""
+        mock_metadata.return_value = VideoMetadata(
+            video_id="abc123", title="Test", slug_title="test"
+        )
+        existing = tmp_path / "abc123_test"
+        existing.mkdir()
+        (existing / "transcript_raw.md").write_text("raw transcript")
+        (existing / "transcript.md").write_text("already beautified")
+
+        result = process(
+            url="https://www.youtube.com/watch?v=abc123",
+            model_name="small",
+            output_dir=tmp_path,
+            keep_audio=False,
+            force=False,
+        )
+
+        # Beautified transcript should be preserved, not overwritten
+        assert (result / "transcript.md").read_text() == "already beautified"
+        assert (result / "summary.md").read_text() == "summary"
+        assert (result / "quiz.md").read_text() == "quiz"
+        # Summary received the existing beautified text, not a new GPT call
+        mock_summary.assert_called_once_with("already beautified")
 
     @patch("any_video.pipeline.generate_quiz", return_value="quiz")
     @patch("any_video.pipeline.generate_summary", return_value="summary")
