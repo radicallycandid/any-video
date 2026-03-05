@@ -1,59 +1,27 @@
-[project]
-name = "any-video"
-version = "0.1.0"
-description = "YouTube video transcriber with AI-generated summaries and quizzes"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "Vitor Margato" }]
-keywords = ["youtube", "transcription", "whisper", "openai", "summarization"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-]
-
-dependencies = [
-    "openai>=1.0.0",
-    "openai-whisper>=20230314",
-    "yt-dlp>=2023.1.1",
-]
-
-[project.optional-dependencies]
-server = [
-    "flask>=3.0.0",
-    "flask-cors>=4.0.0",
-    "flask-limiter>=3.0.0",
-]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-mock>=3.0.0",
-    "pytest-cov>=4.0.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
-
-[project.scripts]
-any-video = "any_video:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312", "py313"]
+[project]
+name = "any-video"
+version = "2.0.0"
+description = "CLI tool to download YouTube videos, transcribe with Whisper, and generate learning materials via GPT"
+requires-python = ">=3.10"
+dependencies = [
+    "openai-whisper>=20240930,<20260000",
+    "openai>=1.0,<3",
+    "yt-dlp>=2024.0,<2027",
+]
+
+[project.scripts]
+any-video = "any_video.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.0",
+    "ruff>=0.8",
+]
 
 [tool.ruff]
 line-length = 100
@@ -63,12 +31,5 @@ target-version = "py310"
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = ["E501"]
 
-[tool.coverage.run]
-source = ["any_video", "server"]
-omit = ["tests/*"]
-
-[tool.coverage.report]
-show_missing = true
-fail_under = 80
-
-[tool.uv.sources]
+[tool.pytest.ini_options]
+testpaths = ["tests"]

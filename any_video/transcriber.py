@@ -1,45 +1,32 @@
-"""Audio transcription using OpenAI Whisper."""
+"""Whisper model loading and transcription."""
 
+import logging
 from pathlib import Path
 
 import whisper
 
-from any_video.config import WHISPER_MODELS_DIR, logger
-from any_video.exceptions import TranscriptionError
+from any_video.config import TranscriptionError
+
+logger = logging.getLogger("any_video")
 
 
-def transcribe_audio(audio_path: Path, model_name: str) -> str:
-    """
-    Transcribe audio using Whisper.
-
-    Uses locally stored Whisper model files from ~/whisper/.
-
-    Args:
-        audio_path: Path to the audio file.
-        model_name: Name of the Whisper model (tiny, small, large-v3).
-
-    Returns:
-        The transcribed text.
-
-    Raises:
-        TranscriptionError: If transcription fails.
-    """
-    # Ensure the whisper models directory exists
-    WHISPER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
+def load_model(model_name: str) -> whisper.Whisper:
+    """Load a Whisper model by name."""
+    logger.debug("Loading Whisper model '%s'...", model_name)
     try:
-        model_path = WHISPER_MODELS_DIR / f"{model_name}.pt"
-        if not model_path.exists():
-            logger.info(
-                f"Downloading Whisper model '{model_name}' (this may take a few minutes)..."
-            )
-        else:
-            logger.info(f"Loading Whisper model: {model_name}...")
-        model = whisper.load_model(model_name, download_root=str(WHISPER_MODELS_DIR))
+        return whisper.load_model(model_name)
+    except Exception as e:
+        raise TranscriptionError(f"Failed to load Whisper model '{model_name}': {e}") from e
 
-        logger.info("Transcribing audio (this may take a while)...")
-        result = model.transcribe(str(audio_path), verbose=False)
-        logger.info("Transcription complete.")
-        return result["text"]
-    except (RuntimeError, OSError, ValueError) as e:
+
+def transcribe(model: whisper.Whisper, audio_path: Path) -> str:
+    """Transcribe an audio file using a loaded Whisper model.
+
+    Returns the raw transcript text.
+    """
+    logger.debug("Transcribing audio...")
+    try:
+        result = model.transcribe(str(audio_path))
+    except Exception as e:
         raise TranscriptionError(f"Transcription failed: {e}") from e
+    return result["text"].strip()

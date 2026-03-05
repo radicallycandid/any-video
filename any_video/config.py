@@ -1,79 +1,75 @@
-"""Configuration, logging, and utility decorators for any-video."""
+"""Constants, logging setup, shared types and dataclasses."""
 
 import logging
-import os
-import time
-from collections.abc import Callable
-from functools import wraps
-from pathlib import Path
-from typing import TypeVar
+import re
+import sys
+from dataclasses import dataclass
 
-# Configuration
-WHISPER_MODELS_DIR = Path.home() / "whisper"
-DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "output"
-GPT_MODEL = os.environ.get("ANY_VIDEO_GPT_MODEL", "gpt-4.1")
-GPT_MODEL_ADVANCED = os.environ.get("ANY_VIDEO_GPT_MODEL_ADVANCED", "gpt-5.2")
-MAX_TRANSCRIPT_CHARS = 100_000
-BEAUTIFY_CHUNK_SIZE = 50_000
+# --- Constants ---
 
-# Retry configuration
+WHISPER_MODELS = ("tiny", "small", "medium", "large-v3")
+DEFAULT_WHISPER_MODEL = "small"
+DEFAULT_OUTPUT_DIR = "./output"
+GPT_MODEL = "gpt-4.1"
+MAX_CHUNK_CHARS = 40_000  # ~10k tokens, safe for gpt-4.1 context
+OUTPUT_FILES = {
+    "raw_transcript": "transcript_raw.md",
+    "transcript": "transcript.md",
+    "summary": "summary.md",
+    "quiz": "quiz.md",
+    "audio": "audio.mp3",
+}
+MAX_SLUG_LENGTH = 50
 MAX_RETRIES = 3
-RETRY_DELAY = 1.0  # Base delay in seconds (will be multiplied for exponential backoff)
-
-# Set up logging
-logger = logging.getLogger("any-video")
-
-T = TypeVar("T")
 
 
-def setup_logging(verbose: bool = False) -> None:
-    """Configure logging for the application."""
-    if logger.handlers:
-        return
-    level = logging.DEBUG if verbose else logging.INFO
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(level)
+# --- Dataclasses ---
 
 
-def retry_with_backoff(
-    max_retries: int = MAX_RETRIES,
-    base_delay: float = RETRY_DELAY,
-    exceptions: tuple = (Exception,),
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    """
-    Decorator that retries a function with exponential backoff.
+@dataclass(frozen=True)
+class VideoMetadata:
+    video_id: str
+    title: str
+    slug_title: str
 
-    Args:
-        max_retries: Maximum number of retry attempts.
-        base_delay: Base delay between retries (doubles each attempt).
-        exceptions: Tuple of exception types to catch and retry.
 
-    Returns:
-        Decorated function with retry logic.
-    """
+# --- Exceptions ---
 
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            last_exception = None
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except exceptions as e:
-                    last_exception = e
-                    if attempt < max_retries:
-                        delay = base_delay * (2**attempt)
-                        logger.warning(
-                            f"Attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
-                            f"Retrying in {delay:.1f}s..."
-                        )
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"All {max_retries + 1} attempts failed.")
-            raise last_exception
 
-        return wrapper
+class AnyVideoError(Exception):
+    """Base exception for any-video."""
 
-    return decorator
+
+class DownloadError(AnyVideoError):
+    """Error during video download or URL validation."""
+
+
+class TranscriptionError(AnyVideoError):
+    """Error during Whisper transcription."""
+
+
+class OpenAIError(AnyVideoError):
+    """Error during OpenAI API calls."""
+
+
+# --- Helpers ---
+
+
+def slugify(title: str) -> str:
+    """Convert a title to a URL-safe slug."""
+    slug = title.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    return slug[:MAX_SLUG_LENGTH]
+
+
+def setup_logging(verbose: bool) -> None:
+    """Configure logging based on verbosity."""
+    logger = logging.getLogger("any_video")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
+    logger.propagate = False

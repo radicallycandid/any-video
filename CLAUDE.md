@@ -1,46 +1,22 @@
 # CLAUDE.md — any-video
 
-## Project Overview
+## Project context
 
-YouTube video transcriber and learning tool. Downloads videos, transcribes locally with OpenAI Whisper, then generates AI-powered beautified transcripts, summaries, and quizzes using GPT models. Also available as a Chrome extension backed by a local Flask server.
+CLI tool that downloads YouTube videos, transcribes them locally with Whisper, and generates learning materials (beautified transcripts, summaries, quizzes) via OpenAI GPT. One developer maintains it. The priority is correctness and clarity, not production robustness or extensibility.
 
-## Project Structure
+## Tech stack
 
-```
-any_video/            # Main package
-  __init__.py         # Public API re-exports
-  __main__.py         # python -m any_video entry point
-  cli.py              # CLI argument parsing and output writing
-  config.py           # Constants, logging, retry decorator
-  downloader.py       # yt-dlp integration, URL handling, slugify
-  exceptions.py       # TranscriptionError, APIError, DownloadError
-  openai_client.py    # OpenAI API calls, beautify, summary, quiz
-  pipeline.py         # ProcessingResult, process_video orchestrator
-  transcriber.py      # Whisper transcription
-server.py             # Flask server for Chrome extension
-tests/
-  test_any_video.py   # Core module tests (pytest)
-  test_server.py      # Server endpoint tests
-extension/            # Chrome extension (Manifest V3)
-  popup.html/js/css   # Extension UI
-  manifest.json       # Extension config
-pyproject.toml        # Project config, deps, tool settings
-```
-
-## Tech Stack
-
-- **Python 3.10+** with type hints throughout
-- **openai-whisper** — local transcription (no API cost)
-- **openai** — GPT-4.1 (beautification), GPT-5.2 (summary/quiz)
+- **Python 3.10+** with type hints and dataclasses
+- **openai-whisper** — local transcription
+- **openai** — GPT API for beautification, summary, quiz
 - **yt-dlp** — YouTube downloading
-- **Flask + flask-cors** — local server for Chrome extension
-- **uv** — recommended package manager
+- **uv** — package manager
 
 ## Commands
 
 ```bash
 # Run the CLI
-uv run any-video "<youtube-url>" [--model small|tiny|large-v3] [--output-dir ./output] [--keep-audio] [-v]
+uv run any-video "<youtube-url>" [--model small] [--output-dir ./output] [--keep-audio] [--force] [-v]
 
 # Run tests
 uv run pytest
@@ -50,43 +26,57 @@ uv run ruff check .
 
 # Format code
 uv run ruff format .
-
-# Start the Flask server (Chrome extension backend)
-uv run python server.py
 ```
 
-## Code Style
+## Code style
 
 - **Formatter:** Black, 100 char line length
-- **Linter:** Ruff — rules: E, F, W, I, UP, B, C4, SIM (E501 ignored, handled by Black)
+- **Linter:** Ruff — rules: E, F, W, I, UP, B, C4, SIM (E501 ignored)
 - **Target:** Python 3.10+
-- **Test framework:** pytest with pytest-mock
+- **Tests:** pytest + pytest-mock
 
-## Key Patterns
+## Anti-patterns to refuse
 
-- **Custom exceptions:** `TranscriptionError`, `APIError`, `DownloadError` — each for a distinct failure mode
-- **Retry decorator:** `@retry_with_backoff` with exponential backoff on OpenAI rate limit / connection / timeout errors
-- **Model token params:** uses `max_completion_tokens` for gpt-4.1+, gpt-5.x, o-series; `max_tokens` for older models
-- **Transcript truncation:** truncates at sentence boundaries, max 100K chars
+- Do not add speculative abstractions (classes, interfaces, utility modules) for functionality that does not exist yet.
+- Do not add configuration options that are not currently needed.
+- Do not increase test coverage by adding tests that test implementation details rather than behavior.
+- When in doubt between two approaches, choose the simpler one.
 
-## External Requirements
+## Project structure
 
-- **ffmpeg** must be installed system-wide (`brew install ffmpeg`)
+```
+any_video/
+  __init__.py         # Public API re-exports
+  __main__.py         # python -m any_video entry point
+  cli.py              # CLI argument parsing, output writing, cache check
+  config.py           # Constants, logging setup, shared types/dataclasses
+  downloader.py       # yt-dlp integration, URL validation, video ID extraction
+  openai_client.py    # OpenAI API: beautify, summarize, quiz, chunking, retry
+  pipeline.py         # Processing orchestrator
+  transcriber.py      # Whisper model loading and transcription
+tests/
+  test_*.py           # Unit tests with mocks
+pyproject.toml        # Project config, deps, tool settings
+PRD.md                # Product requirements document
+```
+
+## Output structure
+
+```
+{output-dir}/{VIDEO_ID}_{slug-title}/
+  transcript_raw.md   # Raw Whisper output
+  transcript.md       # AI-beautified transcript
+  summary.md          # AI-generated summary
+  quiz.md             # 10 multiple-choice questions
+  audio.mp3           # Only with --keep-audio
+```
+
+## Idempotency
+
+Before processing, check if output for this video ID already exists. If it does and `--force` is not set, skip and print the existing path. If `--force` is set, delete existing output and re-process.
+
+## External requirements
+
+- **ffmpeg** must be installed system-wide
 - **OPENAI_API_KEY** env var must be set
-- Whisper models download to `~/whisper/` on first run
-
-## Output
-
-Each processed video creates a folder under `output/{VIDEO_ID}_{slug-title}/` containing:
-- `transcript_raw.md` — raw Whisper output
-- `transcript.md` — AI-beautified transcript
-- `summary.md` — AI-generated summary
-- `quiz.md` — 10 multiple-choice questions
-- `audio.mp3` — only with `--keep-audio`
-
-## Server API
-
-- `GET /health` — returns status and whether OpenAI key is configured
-- `POST /process` — accepts `{url, model?, keep_audio?}`, returns transcription results
-
-Server runs on `localhost:8765`.
+- Whisper models download automatically on first run

@@ -1,57 +1,41 @@
-"""Command-line interface for any-video."""
+"""CLI argument parsing, entry point, and error handling."""
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 from any_video.config import (
     DEFAULT_OUTPUT_DIR,
-    GPT_MODEL,
-    GPT_MODEL_ADVANCED,
-    logger,
+    DEFAULT_WHISPER_MODEL,
+    WHISPER_MODELS,
+    AnyVideoError,
     setup_logging,
 )
-from any_video.downloader import extract_video_id, get_video_title, slugify
-from any_video.exceptions import APIError, DownloadError, TranscriptionError
-from any_video.pipeline import process_video
+from any_video.pipeline import process
 
 
-def main():
-    """Main entry point for the CLI."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Transcribe YouTube videos and generate summaries with quizzes.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s "https://www.youtube.com/watch?v=VIDEO_ID"
-  %(prog)s "https://youtu.be/VIDEO_ID" --model large-v3
-  %(prog)s "https://youtube.com/shorts/VIDEO_ID" --output-dir ./results
-        """,
+        prog="any-video",
+        description="Download YouTube videos, transcribe with Whisper, and generate learning materials via GPT.",
     )
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument(
         "--model",
-        choices=["tiny", "small", "large-v3"],
-        default="small",
-        help="Whisper model to use (default: small)",
+        default=DEFAULT_WHISPER_MODEL,
+        choices=WHISPER_MODELS,
+        help=f"Whisper model size (default: {DEFAULT_WHISPER_MODEL})",
     )
     parser.add_argument(
         "--output-dir",
-        type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output with debug information",
+        help=f"Base directory for output (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
         "--keep-audio",
         action="store_true",
-        help="Keep the downloaded audio file instead of deleting it",
+        help="Retain the downloaded audio file in output",
     )
     parser.add_argument(
         "--force",
@@ -59,95 +43,31 @@ Examples:
         help="Re-process even if output already exists",
     )
     parser.add_argument(
-        "--gpt-model",
-        default=None,
-        help=f"GPT model for transcript beautification (default: {GPT_MODEL})",
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Verbose logging",
     )
-    parser.add_argument(
-        "--gpt-model-advanced",
-        default=None,
-        help=f"GPT model for summary/quiz generation (default: {GPT_MODEL_ADVANCED})",
-    )
-    args = parser.parse_args()
+    return parser.parse_args(argv)
 
-    # Set up logging
-    setup_logging(verbose=args.verbose)
+
+def main(argv: list[str] | None = None) -> None:
+    """Main entry point for the CLI."""
+    args = parse_args(argv)
+    setup_logging(args.verbose)
 
     try:
-        # Check for API key early
-        if not os.environ.get("OPENAI_API_KEY"):
-            logger.error("OPENAI_API_KEY environment variable not set.")
-            logger.error("Export it with: export OPENAI_API_KEY='your-key-here'")
-            sys.exit(1)
-
-        logger.info(f"Processing: {args.url}")
-
-        # Extract video info for output directory naming
-        video_id = extract_video_id(args.url)
-        video_title = get_video_title(args.url)
-        folder_name = f"{video_id}_{slugify(video_title)}"
-        output_path = args.output_dir / folder_name
-
-        # Check for existing output (skip if already processed)
-        expected_files = ["transcript_raw.md", "transcript.md", "summary.md", "quiz.md"]
-        if not args.force and all((output_path / f).exists() for f in expected_files):
-            logger.info(f"Output already exists at {output_path}. Use --force to re-process.")
-            sys.exit(0)
-
-        # Run the pipeline, passing pre-computed info to avoid duplicate work
-        result = process_video(
-            args.url,
-            args.model,
-            work_dir=output_path,
-            gpt_model=args.gpt_model,
-            gpt_model_advanced=args.gpt_model_advanced,
-            video_id=video_id,
-            video_title=video_title,
+        output_path = process(
+            url=args.url,
+            model_name=args.model,
+            output_dir=Path(args.output_dir),
+            keep_audio=args.keep_audio,
+            force=args.force,
         )
-
-        # Save raw transcript for reference
-        raw_transcript_file = output_path / "transcript_raw.md"
-        raw_transcript_file.write_text(
-            f"# Raw Transcript: {result.video_title}\n\n{result.transcript_raw}\n"
-        )
-        logger.debug(f"Saved raw transcript: {raw_transcript_file}")
-
-        # Save beautified transcript
-        transcript_file = output_path / "transcript.md"
-        transcript_file.write_text(f"# Transcript: {result.video_title}\n\n{result.transcript}\n")
-        logger.info(f"Saved: {transcript_file}")
-
-        # Save summary
-        summary_file = output_path / "summary.md"
-        summary_file.write_text(f"# Summary: {result.video_title}\n\n{result.summary}\n")
-        logger.info(f"Saved: {summary_file}")
-
-        # Save quiz
-        quiz_file = output_path / "quiz.md"
-        quiz_file.write_text(f"# Quiz: {result.video_title}\n\n{result.quiz}\n")
-        logger.info(f"Saved: {quiz_file}")
-
-        # Clean up audio file (unless user wants to keep it)
-        if args.keep_audio:
-            logger.info(f"Audio file kept: {result.audio_path}")
-        elif result.audio_path and result.audio_path.exists():
-            result.audio_path.unlink()
-            logger.debug("Cleaned up temporary audio file")
-
-        logger.info(f"\nDone! Files saved to: {output_path}")
-
-    except ValueError as e:
-        logger.error(f"Error: {e}")
-        sys.exit(1)
-    except DownloadError as e:
-        logger.error(f"Download error: {e}")
-        sys.exit(1)
-    except TranscriptionError as e:
-        logger.error(f"Transcription error: {e}")
-        sys.exit(1)
-    except APIError as e:
-        logger.error(f"API error: {e}")
+        print(output_path)
+    except AnyVideoError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.warning("\nOperation cancelled by user.")
-        sys.exit(130)
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(1)

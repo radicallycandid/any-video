@@ -1,89 +1,114 @@
-"""Video processing pipeline."""
+"""Processing orchestrator — ties all modules together."""
 
+import logging
+import shutil
 import tempfile
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
-from any_video.config import logger
-from any_video.downloader import download_audio, extract_video_id, get_video_title
-from any_video.openai_client import beautify_transcript, generate_summary_and_quiz
-from any_video.transcriber import transcribe_audio
+from any_video.config import OUTPUT_FILES
+from any_video.downloader import download_audio, get_video_metadata
+from any_video.openai_client import beautify_transcript, generate_quiz, generate_summary
+from any_video.transcriber import load_model, transcribe
+
+logger = logging.getLogger("any_video")
 
 
-@dataclass
-class ProcessingResult:
-    """Result of processing a video through the full pipeline."""
+def find_existing_output(output_dir: Path, video_id: str) -> Path | None:
+    """Check if output for this video ID already exists.
 
-    video_id: str
-    video_title: str
-    transcript_raw: str
-    transcript: str
-    summary: str
-    quiz: str
-    audio_path: Path | None = None
+    Returns the most recently modified match if multiple exist.
+    """
+    matches = list(output_dir.glob(f"{video_id}_*"))
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
 
 
-def process_video(
+def _is_output_complete(output_path: Path) -> bool:
+    """Check if all expected text output files exist."""
+    required = ["raw_transcript", "transcript", "summary", "quiz"]
+    return all((output_path / OUTPUT_FILES[key]).exists() for key in required)
+
+
+def process(
     url: str,
-    model: str = "small",
-    work_dir: Path | None = None,
-    gpt_model: str | None = None,
-    gpt_model_advanced: str | None = None,
-    video_id: str | None = None,
-    video_title: str | None = None,
-    on_progress: Callable[[str, int], None] | None = None,
-) -> ProcessingResult:
+    model_name: str,
+    output_dir: Path,
+    keep_audio: bool,
+    force: bool,
+) -> Path:
+    """Run the full processing pipeline.
+
+    Returns the path to the output directory. Intermediate results are persisted
+    so that a failed GPT step can be resumed without re-downloading or re-transcribing.
     """
-    Run the full video processing pipeline.
+    # 1. Get metadata (validates URL)
+    metadata = get_video_metadata(url)
+    logger.info("Video: %s (%s)", metadata.title, metadata.video_id)
 
-    Downloads audio, transcribes locally with Whisper, beautifies the transcript,
-    and generates a summary and quiz using GPT.
+    # 2. Check cache
+    existing = find_existing_output(output_dir, metadata.video_id)
+    if existing and not force:
+        if _is_output_complete(existing):
+            logger.info("Output already exists: %s", existing)
+            return existing
+        logger.info("Resuming incomplete output: %s", existing)
+        dest = existing
+    else:
+        if existing and force:
+            logger.info("Removing existing output (--force): %s", existing)
+            shutil.rmtree(existing)
+        dir_name = f"{metadata.video_id}_{metadata.slug_title}"
+        dest = output_dir / dir_name
+        dest.mkdir(parents=True, exist_ok=True)
 
-    Args:
-        url: YouTube video URL.
-        model: Whisper model name (tiny, small, large-v3).
-        work_dir: Directory for intermediate files. Uses a temp dir if None.
-        gpt_model: Override GPT model for beautification.
-        gpt_model_advanced: Override GPT model for summary/quiz.
-        video_id: Pre-computed video ID (avoids re-extraction).
-        video_title: Pre-computed video title (avoids re-fetching).
-        on_progress: Optional callback(stage, percent) for progress updates.
+    raw_transcript_path = dest / OUTPUT_FILES["raw_transcript"]
 
-    Returns:
-        ProcessingResult with all generated content.
-    """
+    # 3. Download and transcribe (skip if raw transcript already persisted)
+    if raw_transcript_path.exists():
+        logger.info("Found existing raw transcript, skipping download and transcription")
+        raw_transcript = raw_transcript_path.read_text(encoding="utf-8")
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            logger.info("[1/5] Downloading audio...")
+            audio_path = download_audio(url, tmp_path)
 
-    def report(stage: str, pct: int) -> None:
-        if on_progress:
-            on_progress(stage, pct)
+            logger.info("[2/5] Transcribing audio...")
+            whisper_model = load_model(model_name)
+            raw_transcript = transcribe(whisper_model, audio_path)
 
-    if video_id is None:
-        video_id = extract_video_id(url)
-    if video_title is None:
-        video_title = get_video_title(url)
-    logger.info(f"Video: {video_title}")
+            # Persist raw transcript immediately so it survives GPT failures
+            raw_transcript_path.write_text(raw_transcript, encoding="utf-8")
 
-    if work_dir is None:
-        work_dir = Path(tempfile.mkdtemp())
-    work_dir.mkdir(parents=True, exist_ok=True)
+            if keep_audio:
+                shutil.copy2(audio_path, dest / OUTPUT_FILES["audio"])
 
-    report("Downloading audio", 0)
-    audio_file = download_audio(url, work_dir)
-    report("Transcribing audio", 25)
-    raw_transcript = transcribe_audio(audio_file, model)
-    report("Beautifying transcript", 50)
-    transcript = beautify_transcript(raw_transcript, video_title, model=gpt_model)
-    report("Generating summary and quiz", 75)
-    summary, quiz = generate_summary_and_quiz(transcript, video_title, model=gpt_model_advanced)
-    report("Complete", 100)
+    # 4. GPT processing — each result written immediately, skip if already done
+    transcript_path = dest / OUTPUT_FILES["transcript"]
+    if transcript_path.exists():
+        logger.info("[3/5] Beautified transcript already exists, skipping")
+        beautified = transcript_path.read_text(encoding="utf-8")
+    else:
+        logger.info("[3/5] Beautifying transcript...")
+        beautified = beautify_transcript(raw_transcript)
+        transcript_path.write_text(beautified, encoding="utf-8")
 
-    return ProcessingResult(
-        video_id=video_id,
-        video_title=video_title,
-        transcript_raw=raw_transcript,
-        transcript=transcript,
-        summary=summary,
-        quiz=quiz,
-        audio_path=audio_file,
-    )
+    summary_path = dest / OUTPUT_FILES["summary"]
+    if summary_path.exists():
+        logger.info("[4/5] Summary already exists, skipping")
+    else:
+        logger.info("[4/5] Generating summary...")
+        summary = generate_summary(beautified)
+        summary_path.write_text(summary, encoding="utf-8")
+
+    quiz_path = dest / OUTPUT_FILES["quiz"]
+    if quiz_path.exists():
+        logger.info("[5/5] Quiz already exists, skipping")
+    else:
+        logger.info("[5/5] Generating quiz...")
+        quiz = generate_quiz(beautified)
+        quiz_path.write_text(quiz, encoding="utf-8")
+
+    logger.info("Output written to: %s", dest)
+    return dest
