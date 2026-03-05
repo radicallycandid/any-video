@@ -50,10 +50,9 @@ def _mock_openai_response(content: str) -> MagicMock:
 
 
 class TestBeautifyTranscript:
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_beautifies_short_text(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_beautifies_short_text(self, mock_get_client):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _mock_openai_response("Clean text.")
 
         result = beautify_transcript("messy text")
@@ -61,10 +60,9 @@ class TestBeautifyTranscript:
         assert result == "Clean text."
         mock_client.chat.completions.create.assert_called_once()
 
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_chunks_long_text(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_chunks_long_text(self, mock_get_client):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _mock_openai_response("Clean chunk.")
 
         long_text = "This is a sentence. " * 3000  # Well over MAX_CHUNK_CHARS
@@ -75,10 +73,9 @@ class TestBeautifyTranscript:
 
 
 class TestGenerateSummary:
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_generates_summary(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_generates_summary(self, mock_get_client):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _mock_openai_response(
             "## Summary\nKey points."
         )
@@ -87,12 +84,26 @@ class TestGenerateSummary:
 
         assert result == "## Summary\nKey points."
 
+    @patch("any_video.openai_client._get_client")
+    def test_chunks_long_transcript(self, mock_get_client):
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.side_effect = [
+            _mock_openai_response("Chunk 1 summary."),
+            _mock_openai_response("Chunk 2 summary."),
+            _mock_openai_response("Merged summary."),
+        ]
+
+        long_text = "This is a sentence. " * 3000
+        result = generate_summary(long_text)
+
+        assert result == "Merged summary."
+        assert mock_client.chat.completions.create.call_count == 3
+
 
 class TestGenerateQuiz:
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_generates_quiz(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_generates_quiz(self, mock_get_client):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _mock_openai_response(
             "## Question 1\nQ: What?"
         )
@@ -101,13 +112,27 @@ class TestGenerateQuiz:
 
         assert result == "## Question 1\nQ: What?"
 
+    @patch("any_video.openai_client._get_client")
+    def test_chunks_long_transcript(self, mock_get_client):
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.side_effect = [
+            _mock_openai_response("Chunk 1 summary."),
+            _mock_openai_response("Chunk 2 summary."),
+            _mock_openai_response("## Question 1\nQ: What?"),
+        ]
+
+        long_text = "This is a sentence. " * 3000
+        result = generate_quiz(long_text)
+
+        assert result == "## Question 1\nQ: What?"
+        assert mock_client.chat.completions.create.call_count == 3
+
 
 class TestRetry:
     @patch("any_video.openai_client.time.sleep")
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_retries_on_rate_limit(self, mock_openai_class, mock_sleep):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_retries_on_rate_limit(self, mock_get_client, mock_sleep):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.side_effect = [
             openai.RateLimitError("rate limited", response=MagicMock(), body=None),
             _mock_openai_response("Success after retry."),
@@ -119,10 +144,9 @@ class TestRetry:
         assert mock_sleep.call_count == 1
 
     @patch("any_video.openai_client.time.sleep")
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_raises_after_max_retries(self, mock_openai_class, mock_sleep):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_raises_after_max_retries(self, mock_get_client, mock_sleep):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.side_effect = openai.RateLimitError(
             "rate limited", response=MagicMock(), body=None
         )
@@ -130,10 +154,17 @@ class TestRetry:
         with pytest.raises(OpenAIError, match="failed after 3 retries"):
             generate_summary("Some text.")
 
-    @patch("any_video.openai_client.openai.OpenAI")
-    def test_raises_on_non_retryable_error(self, mock_openai_class):
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
+    @patch("any_video.openai_client._get_client")
+    def test_raises_on_none_content(self, mock_get_client):
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_openai_response(None)
+
+        with pytest.raises(OpenAIError, match="empty content"):
+            generate_summary("Some text.")
+
+    @patch("any_video.openai_client._get_client")
+    def test_raises_on_non_retryable_error(self, mock_get_client):
+        mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.side_effect = openai.AuthenticationError(
             "bad key", response=MagicMock(), body=None
         )
