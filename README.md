@@ -6,10 +6,11 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 
 - **Local Transcription**: Uses OpenAI's Whisper model running locally (no API costs for transcription)
 - **Transcript Beautification**: AI-powered cleanup of raw transcripts - fixes typos, corrects proper nouns, adds paragraph breaks
-- **AI Summaries**: Generates concise summaries using GPT-5.2
+- **AI Summaries**: Generates concise summaries using Claude Sonnet 4.6
 - **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
-- **Multiple Whisper Models**: Choose between `tiny`, `small`, or `large-v3` based on your accuracy/speed needs
-- **Robust Error Handling**: Automatic retries with exponential backoff for API failures
+- **Multiple Whisper Models**: Choose between `tiny`, `small`, `medium`, or `large-v3` based on your accuracy/speed needs
+- **Idempotent with Resume**: Re-running on a URL skips work that's already been done. If a previous run failed mid-pipeline, the next run picks up from where it left off (raw transcript, summary, etc.). Use `--force` to start over.
+- **Robust Error Handling**: The Anthropic SDK automatically retries transient errors (rate limits, 5xx) with exponential backoff
 - **Verbose Mode**: Debug logging with `-v` flag for troubleshooting
 
 ## Requirements
@@ -17,7 +18,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - **ffmpeg** (required for audio processing)
-- OpenAI API key (for summary, quiz, and transcript beautification)
+- Anthropic API key (for summary, quiz, and transcript beautification)
 
 ### Installing ffmpeg
 
@@ -44,8 +45,8 @@ winget install ffmpeg
 git clone https://github.com/radicallycandid/any-video.git
 cd any-video
 
-# Set your OpenAI API key
-export OPENAI_API_KEY='your-key-here'
+# Set your Anthropic API key
+export ANTHROPIC_API_KEY='your-key-here'
 
 # Run it (uv handles everything automatically)
 uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID"
@@ -74,9 +75,10 @@ uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID" -v
 | Option | Description | Default |
 |--------|-------------|---------|
 | `url` | YouTube video URL (required) | - |
-| `--model` | Whisper model: `tiny`, `small`, `large-v3` | `small` |
+| `--model` | Whisper model: `tiny`, `small`, `medium`, `large-v3` | `small` |
 | `--output-dir` | Output directory for generated files | `./output` |
 | `--keep-audio` | Keep the downloaded audio file | off |
+| `--force` | Re-process even if output already exists | off |
 | `-v, --verbose` | Enable debug output | off |
 
 ### Supported URL Formats
@@ -96,7 +98,8 @@ output/
     ├── transcript.md       # Beautified, readable transcript
     ├── transcript_raw.md   # Original Whisper output (for reference)
     ├── summary.md          # AI-generated summary
-    └── quiz.md             # 10 multiple-choice questions
+    ├── quiz.md             # 10 multiple-choice questions
+    └── audio.mp3           # Only with --keep-audio
 ```
 
 ## Whisper Models
@@ -107,6 +110,7 @@ Whisper models are downloaded automatically on first use to `~/whisper/`. The in
 |-------|------|-------|----------|
 | `tiny` | 75 MB | Fastest | Good for simple content |
 | `small` | 483 MB | Balanced | Good for most videos |
+| `medium` | 1.5 GB | Slower | Better than `small` |
 | `large-v3` | 3 GB | Slowest | Best accuracy |
 
 ## Development
