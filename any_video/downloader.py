@@ -15,6 +15,7 @@ _YOUTUBE_PATTERNS = [
     re.compile(r"(?:youtube\.com/watch\?.*v=)([\w-]{11})"),
     re.compile(r"(?:youtu\.be/)([\w-]{11})"),
     re.compile(r"(?:youtube\.com/embed/)([\w-]{11})"),
+    re.compile(r"(?:youtube\.com/shorts/)([\w-]{11})"),
 ]
 
 
