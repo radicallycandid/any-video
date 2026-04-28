@@ -7,7 +7,7 @@ CLI tool that downloads YouTube videos, transcribes them locally with Whisper, a
 ## Tech stack
 
 - **Python 3.10+** with type hints and dataclasses
-- **openai-whisper** — local transcription
+- **faster-whisper** — local transcription (CTranslate2 backend)
 - **anthropic** — Claude API for beautification, summary, quiz
 - **yt-dlp** — YouTube downloading
 - **uv** — package manager

@@ -4,7 +4,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 
 ## Features
 
-- **Local Transcription**: Uses OpenAI's Whisper model running locally (no API costs for transcription)
+- **Local Transcription**: Uses Whisper running locally via faster-whisper / CTranslate2 (no API costs for transcription)
 - **Transcript Beautification**: AI-powered cleanup of raw transcripts - fixes typos, corrects proper nouns, adds paragraph breaks
 - **AI Summaries**: Generates concise summaries using Claude Sonnet 4.6
 - **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
@@ -104,7 +104,7 @@ output/
 
 ## Whisper Models
 
-Whisper models are downloaded automatically on first use to `~/whisper/`. The initial download may take a few minutes depending on model size.
+Whisper models are downloaded automatically on first use from HuggingFace and cached at `~/.cache/huggingface/hub/`. The initial download may take a few minutes depending on model size. A live progress bar shows transcription progress against audio duration.
 
 | Model | Size | Speed | Accuracy |
 |-------|------|-------|----------|
