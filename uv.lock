@@ -55,7 +55,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.80,<1" },
-    { name = "openai-whisper", specifier = ">=20240930,<20260000" },
+    { name = "openai-whisper", specifier = ">=20240930,<20270000" },
     { name = "yt-dlp", specifier = ">=2024.0,<2027" },
 ]
 

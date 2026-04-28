@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "any-video"
 version = "2.0.0"
-description = "CLI tool to download YouTube videos, transcribe with Whisper, and generate learning materials via GPT"
+description = "CLI tool to download YouTube videos, transcribe with Whisper, and generate learning materials via Claude"
 requires-python = ">=3.10"
 dependencies = [
-    "openai-whisper>=20240930,<20260000",
+    "openai-whisper>=20240930,<20270000",
     "anthropic>=0.80,<1",
     "yt-dlp>=2024.0,<2027",
 ]
