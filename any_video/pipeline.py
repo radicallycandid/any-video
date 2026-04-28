@@ -5,9 +5,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from any_video.anthropic_client import beautify_transcript, generate_quiz, generate_summary
 from any_video.config import OUTPUT_FILES
 from any_video.downloader import download_audio, get_video_metadata
-from any_video.openai_client import beautify_transcript, generate_quiz, generate_summary
 from any_video.transcriber import load_model, transcribe
 
 logger = logging.getLogger("any_video")
@@ -40,7 +40,7 @@ def process(
     """Run the full processing pipeline.
 
     Returns the path to the output directory. Intermediate results are persisted
-    so that a failed GPT step can be resumed without re-downloading or re-transcribing.
+    so that a failed Claude step can be resumed without re-downloading or re-transcribing.
     """
     # 1. Get metadata (validates URL)
     metadata = get_video_metadata(url)
@@ -78,13 +78,13 @@ def process(
             whisper_model = load_model(model_name)
             raw_transcript = transcribe(whisper_model, audio_path)
 
-            # Persist raw transcript immediately so it survives GPT failures
+            # Persist raw transcript immediately so it survives Claude failures
             raw_transcript_path.write_text(raw_transcript, encoding="utf-8")
 
             if keep_audio:
                 shutil.copy2(audio_path, dest / OUTPUT_FILES["audio"])
 
-    # 4. GPT processing — each result written immediately, skip if already done
+    # 4. Claude processing — each result written immediately, skip if already done
     transcript_path = dest / OUTPUT_FILES["transcript"]
     if transcript_path.exists():
         logger.info("[3/5] Beautified transcript already exists, skipping")

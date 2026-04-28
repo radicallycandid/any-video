@@ -10,8 +10,7 @@ from dataclasses import dataclass
 WHISPER_MODELS = ("tiny", "small", "medium", "large-v3")
 DEFAULT_WHISPER_MODEL = "small"
 DEFAULT_OUTPUT_DIR = "./output"
-GPT_MODEL = "gpt-4.1"
-MAX_CHUNK_CHARS = 40_000  # ~10k tokens, safe for gpt-4.1 context
+CLAUDE_MODEL = "claude-sonnet-4-6"
 OUTPUT_FILES = {
     "raw_transcript": "transcript_raw.md",
     "transcript": "transcript.md",
@@ -20,7 +19,6 @@ OUTPUT_FILES = {
     "audio": "audio.mp3",
 }
 MAX_SLUG_LENGTH = 50
-MAX_RETRIES = 3
 
 
 # --- Dataclasses ---
@@ -48,8 +46,8 @@ class TranscriptionError(AnyVideoError):
     """Error during Whisper transcription."""
 
 
-class OpenAIError(AnyVideoError):
-    """Error during OpenAI API calls."""
+class AnthropicError(AnyVideoError):
+    """Error during Anthropic API calls."""
 
 
 # --- Helpers ---

@@ -9,7 +9,7 @@ description = "CLI tool to download YouTube videos, transcribe with Whisper, and
 requires-python = ">=3.10"
 dependencies = [
     "openai-whisper>=20240930,<20260000",
-    "openai>=1.0,<3",
+    "anthropic>=0.80,<1",
     "yt-dlp>=2024.0,<2027",
 ]
 

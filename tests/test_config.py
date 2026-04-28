@@ -1,6 +1,12 @@
 """Tests for config module."""
 
-from any_video.config import AnyVideoError, DownloadError, OpenAIError, TranscriptionError, slugify
+from any_video.config import (
+    AnthropicError,
+    AnyVideoError,
+    DownloadError,
+    TranscriptionError,
+    slugify,
+)
 
 
 class TestSlugify:
@@ -34,5 +40,5 @@ class TestExceptionHierarchy:
     def test_transcription_error_is_any_video_error(self):
         assert issubclass(TranscriptionError, AnyVideoError)
 
-    def test_openai_error_is_any_video_error(self):
-        assert issubclass(OpenAIError, AnyVideoError)
+    def test_anthropic_error_is_any_video_error(self):
+        assert issubclass(AnthropicError, AnyVideoError)
