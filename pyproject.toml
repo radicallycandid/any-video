@@ -16,13 +16,6 @@ dependencies = [
 [project.scripts]
 any-video = "any_video.cli:main"
 
-[project.optional-dependencies]
-server = [
-    "flask>=3.0,<4",
-    "flask-cors>=5.0,<6",
-    "flask-limiter>=3.0,<4",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=8.0",
