@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.80,<1",
     "yt-dlp>=2024.0,<2027",
     "tqdm>=4.66,<5",
+    "truststore>=0.10,<1",
 ]
 
 [project.scripts]

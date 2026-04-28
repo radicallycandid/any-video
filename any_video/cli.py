@@ -4,6 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import truststore
+
 from any_video.config import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_WHISPER_MODEL,
@@ -12,6 +14,11 @@ from any_video.config import (
     setup_logging,
 )
 from any_video.pipeline import process
+
+# Route TLS validation through the OS trust store so corporate proxy CAs
+# installed in the system keychain are honored. No-op on systems without
+# such CAs — public roots are present in OS trust stores too.
+truststore.inject_into_ssl()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
