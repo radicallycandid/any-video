@@ -7,6 +7,7 @@ import pytest
 
 from any_video.anthropic_client import (
     beautify_transcript,
+    generate_gems,
     generate_quiz,
     generate_summary,
 )
@@ -54,6 +55,18 @@ class TestGenerateSummary:
         assert generate_summary("Some transcript text.") == "## Summary\nKey points."
 
 
+class TestGenerateGems:
+    @patch("any_video.anthropic_client._get_client")
+    def test_generates_gems(self, mock_get_client):
+        mock_client = mock_get_client.return_value
+        mock_client.messages.stream.return_value = _stream_returning(
+            _mock_message("## A claim\n\nArgument here.\n\n> Quote.")
+        )
+
+        result = generate_gems("Some transcript text.")
+        assert result == "## A claim\n\nArgument here.\n\n> Quote."
+
+
 class TestGenerateQuiz:
     @patch("any_video.anthropic_client._get_client")
     def test_generates_quiz(self, mock_get_client):
@@ -62,7 +75,20 @@ class TestGenerateQuiz:
             _mock_message("## Question 1\nQ: What?")
         )
 
-        assert generate_quiz("Some transcript text.") == "## Question 1\nQ: What?"
+        assert generate_quiz("Some transcript text.", "Some gems.") == "## Question 1\nQ: What?"
+
+    @patch("any_video.anthropic_client._get_client")
+    def test_passes_transcript_and_gems_to_user_content(self, mock_get_client):
+        mock_client = mock_get_client.return_value
+        mock_client.messages.stream.return_value = _stream_returning(_mock_message("..."))
+
+        generate_quiz("transcript body", "gems body")
+
+        call_kwargs = mock_client.messages.stream.call_args.kwargs
+        user_content = call_kwargs["messages"][0]["content"]
+        assert "transcript body" in user_content
+        assert "GEMS:" in user_content
+        assert "gems body" in user_content
 
 
 class TestErrorHandling:

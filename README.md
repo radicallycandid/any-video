@@ -6,8 +6,9 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 
 - **Local Transcription**: Uses Whisper running locally via faster-whisper / CTranslate2 (no API costs for transcription)
 - **Transcript Beautification**: AI-powered cleanup of raw transcripts - fixes typos, corrects proper nouns, adds paragraph breaks
-- **AI Summaries**: Generates concise summaries using Claude Sonnet 4.6
-- **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement
+- **AI Summaries**: Generates concise structured summaries using Claude Sonnet 4.6
+- **Gems**: Extracts the load-bearing, non-obvious claims the speaker is actually arguing — each with the supporting quote — so the polished summary doesn't smooth over the parts most worth remembering
+- **Quiz Generation**: Creates 10-question multiple-choice quizzes for learning reinforcement, with at least 3 questions testing the gems
 - **Multiple Whisper Models**: Choose between `tiny`, `small`, `medium`, or `large-v3` based on your accuracy/speed needs
 - **Idempotent with Resume**: Re-running on a URL skips work that's already been done. If a previous run failed mid-pipeline, the next run picks up from where it left off (raw transcript, summary, etc.). Use `--force` to start over.
 - **Robust Error Handling**: The Anthropic SDK automatically retries transient errors (rate limits, 5xx) with exponential backoff
@@ -90,15 +91,16 @@ uv run any-video "https://www.youtube.com/watch?v=VIDEO_ID" -v
 
 ## Output
 
-For each video, the tool creates a folder with four markdown files:
+For each video, the tool creates a folder with five markdown files:
 
 ```
 output/
 └── VIDEO_ID_video-title-slug/
     ├── transcript.md       # Beautified, readable transcript
     ├── transcript_raw.md   # Original Whisper output (for reference)
-    ├── summary.md          # AI-generated summary
-    ├── quiz.md             # 10 multiple-choice questions
+    ├── summary.md          # AI-generated structured summary
+    ├── gems.md             # Load-bearing, non-obvious claims with supporting quotes
+    ├── quiz.md             # 10 multiple-choice questions (3+ test the gems)
     └── audio.mp3           # Only with --keep-audio
 ```
 

@@ -5,7 +5,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from any_video.anthropic_client import beautify_transcript, generate_quiz, generate_summary
+from any_video.anthropic_client import (
+    beautify_transcript,
+    generate_gems,
+    generate_quiz,
+    generate_summary,
+)
 from any_video.config import OUTPUT_FILES
 from any_video.downloader import download_audio, get_video_metadata
 from any_video.transcriber import load_model, transcribe
@@ -26,7 +31,7 @@ def find_existing_output(output_dir: Path, video_id: str) -> Path | None:
 
 def _is_output_complete(output_path: Path) -> bool:
     """Check if all expected text output files exist."""
-    required = ["raw_transcript", "transcript", "summary", "quiz"]
+    required = ["raw_transcript", "transcript", "summary", "gems", "quiz"]
     return all((output_path / OUTPUT_FILES[key]).exists() for key in required)
 
 
@@ -71,10 +76,10 @@ def process(
     else:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            logger.info("[1/5] Downloading audio...")
+            logger.info("[1/6] Downloading audio...")
             audio_path = download_audio(url, tmp_path)
 
-            logger.info("[2/5] Transcribing audio...")
+            logger.info("[2/6] Transcribing audio...")
             whisper_model = load_model(model_name)
             raw_transcript = transcribe(whisper_model, audio_path)
 
@@ -87,27 +92,36 @@ def process(
     # 4. Claude processing — each result written immediately, skip if already done
     transcript_path = dest / OUTPUT_FILES["transcript"]
     if transcript_path.exists():
-        logger.info("[3/5] Beautified transcript already exists, skipping")
+        logger.info("[3/6] Beautified transcript already exists, skipping")
         beautified = transcript_path.read_text(encoding="utf-8")
     else:
-        logger.info("[3/5] Beautifying transcript...")
+        logger.info("[3/6] Beautifying transcript...")
         beautified = beautify_transcript(raw_transcript)
         transcript_path.write_text(beautified, encoding="utf-8")
 
     summary_path = dest / OUTPUT_FILES["summary"]
     if summary_path.exists():
-        logger.info("[4/5] Summary already exists, skipping")
+        logger.info("[4/6] Summary already exists, skipping")
     else:
-        logger.info("[4/5] Generating summary...")
+        logger.info("[4/6] Generating summary...")
         summary = generate_summary(beautified)
         summary_path.write_text(summary, encoding="utf-8")
 
+    gems_path = dest / OUTPUT_FILES["gems"]
+    if gems_path.exists():
+        logger.info("[5/6] Gems already exist, skipping")
+        gems = gems_path.read_text(encoding="utf-8")
+    else:
+        logger.info("[5/6] Extracting gems...")
+        gems = generate_gems(beautified)
+        gems_path.write_text(gems, encoding="utf-8")
+
     quiz_path = dest / OUTPUT_FILES["quiz"]
     if quiz_path.exists():
-        logger.info("[5/5] Quiz already exists, skipping")
+        logger.info("[6/6] Quiz already exists, skipping")
     else:
-        logger.info("[5/5] Generating quiz...")
-        quiz = generate_quiz(beautified)
+        logger.info("[6/6] Generating quiz...")
+        quiz = generate_quiz(beautified, gems)
         quiz_path.write_text(quiz, encoding="utf-8")
 
     logger.info("Output written to: %s", dest)

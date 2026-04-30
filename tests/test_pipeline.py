@@ -20,7 +20,6 @@ class TestFindExistingOutput:
         """When multiple dirs match (e.g., after title change), return most recent."""
         old_dir = tmp_path / "abc123_old-title"
         old_dir.mkdir()
-        # Touch a file so mtime differs
         (old_dir / "marker").write_text("old")
 
         new_dir = tmp_path / "abc123_new-title"
@@ -33,6 +32,7 @@ class TestFindExistingOutput:
 
 class TestProcess:
     @patch("any_video.pipeline.generate_quiz", return_value="quiz")
+    @patch("any_video.pipeline.generate_gems", return_value="gems")
     @patch("any_video.pipeline.generate_summary", return_value="summary")
     @patch("any_video.pipeline.beautify_transcript", return_value="beautified")
     @patch("any_video.pipeline.transcribe", return_value="raw transcript")
@@ -47,6 +47,7 @@ class TestProcess:
         mock_transcribe,
         mock_beautify,
         mock_summary,
+        mock_gems,
         mock_quiz,
         tmp_path,
     ):
@@ -67,7 +68,10 @@ class TestProcess:
         assert (output_path / "transcript_raw.md").read_text() == "raw transcript"
         assert (output_path / "transcript.md").read_text() == "beautified"
         assert (output_path / "summary.md").read_text() == "summary"
+        assert (output_path / "gems.md").read_text() == "gems"
         assert (output_path / "quiz.md").read_text() == "quiz"
+        # Quiz is called with both the beautified transcript and the gems
+        mock_quiz.assert_called_once_with("beautified", "gems")
 
     @patch("any_video.pipeline.get_video_metadata")
     def test_returns_cached_output(self, mock_metadata, tmp_path):
@@ -80,6 +84,7 @@ class TestProcess:
         (existing / "transcript_raw.md").write_text("raw")
         (existing / "transcript.md").write_text("clean")
         (existing / "summary.md").write_text("summary")
+        (existing / "gems.md").write_text("gems")
         (existing / "quiz.md").write_text("quiz")
 
         result = process(
@@ -94,12 +99,13 @@ class TestProcess:
 
     @patch("any_video.pipeline.beautify_transcript", return_value="beautified")
     @patch("any_video.pipeline.generate_summary", return_value="summary")
+    @patch("any_video.pipeline.generate_gems", return_value="gems")
     @patch("any_video.pipeline.generate_quiz", return_value="quiz")
     @patch("any_video.pipeline.get_video_metadata")
     def test_resumes_incomplete_output(
-        self, mock_metadata, mock_quiz, mock_summary, mock_beautify, tmp_path
+        self, mock_metadata, mock_quiz, mock_gems, mock_summary, mock_beautify, tmp_path
     ):
-        """If raw transcript exists but GPT outputs don't, resume from GPT step."""
+        """If raw transcript exists but Claude outputs don't, resume from beautify step."""
         mock_metadata.return_value = VideoMetadata(
             video_id="abc123", title="Test", slug_title="test"
         )
@@ -117,16 +123,18 @@ class TestProcess:
 
         assert (result / "transcript.md").read_text() == "beautified"
         assert (result / "summary.md").read_text() == "summary"
+        assert (result / "gems.md").read_text() == "gems"
         assert (result / "quiz.md").read_text() == "quiz"
         mock_beautify.assert_called_once_with("raw transcript")
 
     @patch("any_video.pipeline.generate_quiz", return_value="quiz")
+    @patch("any_video.pipeline.generate_gems", return_value="gems")
     @patch("any_video.pipeline.generate_summary", return_value="summary")
     @patch("any_video.pipeline.get_video_metadata")
-    def test_skips_completed_gpt_steps_on_resume(
-        self, mock_metadata, mock_summary, mock_quiz, tmp_path
+    def test_skips_completed_claude_steps_on_resume(
+        self, mock_metadata, mock_summary, mock_gems, mock_quiz, tmp_path
     ):
-        """If beautify already done but summary/quiz missing, skip beautify."""
+        """If beautify+summary already done but gems/quiz missing, skip beautify and summary."""
         mock_metadata.return_value = VideoMetadata(
             video_id="abc123", title="Test", slug_title="test"
         )
@@ -134,6 +142,7 @@ class TestProcess:
         existing.mkdir()
         (existing / "transcript_raw.md").write_text("raw transcript")
         (existing / "transcript.md").write_text("already beautified")
+        (existing / "summary.md").write_text("already summarized")
 
         result = process(
             url="https://www.youtube.com/watch?v=abc123",
@@ -143,14 +152,18 @@ class TestProcess:
             force=False,
         )
 
-        # Beautified transcript should be preserved, not overwritten
+        # Existing artifacts preserved
         assert (result / "transcript.md").read_text() == "already beautified"
-        assert (result / "summary.md").read_text() == "summary"
+        assert (result / "summary.md").read_text() == "already summarized"
+        # New artifacts produced from the existing beautified text
+        assert (result / "gems.md").read_text() == "gems"
         assert (result / "quiz.md").read_text() == "quiz"
-        # Summary received the existing beautified text, not a new GPT call
-        mock_summary.assert_called_once_with("already beautified")
+        mock_summary.assert_not_called()
+        mock_gems.assert_called_once_with("already beautified")
+        mock_quiz.assert_called_once_with("already beautified", "gems")
 
     @patch("any_video.pipeline.generate_quiz", return_value="quiz")
+    @patch("any_video.pipeline.generate_gems", return_value="gems")
     @patch("any_video.pipeline.generate_summary", return_value="summary")
     @patch("any_video.pipeline.beautify_transcript", return_value="beautified")
     @patch("any_video.pipeline.transcribe", return_value="raw transcript")
@@ -165,6 +178,7 @@ class TestProcess:
         mock_transcribe,
         mock_beautify,
         mock_summary,
+        mock_gems,
         mock_quiz,
         tmp_path,
     ):
@@ -188,3 +202,4 @@ class TestProcess:
 
         assert not (result / "old_file.txt").exists()
         assert (result / "transcript.md").exists()
+        assert (result / "gems.md").exists()

@@ -51,7 +51,7 @@ any_video/
   cli.py              # CLI argument parsing, output writing, cache check
   config.py           # Constants, logging setup, shared types/dataclasses
   downloader.py       # yt-dlp integration, URL validation, video ID extraction
-  anthropic_client.py # Anthropic API: beautify, summarize, quiz
+  anthropic_client.py # Anthropic API: beautify, summarize, gems, quiz
   pipeline.py         # Processing orchestrator
   transcriber.py      # Whisper model loading and transcription
 tests/
@@ -65,8 +65,9 @@ pyproject.toml        # Project config, deps, tool settings
 {output-dir}/{VIDEO_ID}_{slug-title}/
   transcript_raw.md   # Raw Whisper output
   transcript.md       # AI-beautified transcript
-  summary.md          # AI-generated summary
-  quiz.md             # 10 multiple-choice questions
+  summary.md          # AI-generated structured summary
+  gems.md             # Load-bearing, non-obvious claims with supporting quotes
+  quiz.md             # 10 multiple-choice questions (3+ test the gems)
   audio.mp3           # Only with --keep-audio
 ```
 
@@ -82,13 +83,20 @@ URL → Download Audio → Transcribe (Whisper) → Beautify → Summarize → Q
 
 After validating the URL and resolving cache state (see Idempotency), the pipeline runs five logged steps — the loglines use `[1/5]…[5/5]`:
 
-1. **[1/5]** Download audio as MP3 (yt-dlp, into a temp dir)
-2. **[2/5]** Transcribe with Whisper; persist `transcript_raw.md` immediately so it survives later failures
-3. **[3/5]** Beautify transcript via Claude; write `transcript.md`
-4. **[4/5]** Generate summary via Claude; write `summary.md`
-5. **[5/5]** Generate quiz via Claude (10 multiple-choice questions); write `quiz.md`
+1. **[1/6]** Download audio as MP3 (yt-dlp, into a temp dir)
+2. **[2/6]** Transcribe with Whisper; persist `transcript_raw.md` immediately so it survives later failures
+3. **[3/6]** Beautify transcript via Claude; write `transcript.md`
+4. **[4/6]** Generate summary via Claude; write `summary.md`
+5. **[5/6]** Extract gems via Claude — load-bearing, non-obvious claims with supporting quotes; write `gems.md`
+6. **[6/6]** Generate quiz via Claude (10 multiple-choice questions, ≥3 testing the gems); write `quiz.md`
 
-Each Claude call goes through `client.messages.stream()` with `effort: "low"` and `thinking: disabled` — the workload is content generation, not reasoning, so this minimizes tokens. Streaming is used to avoid SDK HTTP timeouts on long-running responses (e.g. beautifying a multi-hour transcript). Sonnet 4.6's 1M context window is large enough that the full transcript fits in a single request; no chunking is performed.
+Each Claude call goes through `client.messages.stream()`. Effort is tuned per step to match the task:
+
+- **Beautify, summary**: `effort: low`, `thinking: disabled` — mechanical content generation, minimize tokens.
+- **Quiz**: `effort: medium` — distractor quality benefits from extra reasoning.
+- **Gems**: `effort: high` + `thinking: adaptive` — the only step that's pure judgment (filtering claims by importance, sincerity, and non-obviousness), where higher effort and explicit thinking pay off.
+
+Streaming is used to avoid SDK HTTP timeouts on long-running responses (e.g. beautifying a multi-hour transcript). Sonnet 4.6's 1M context window is large enough that the full transcript fits in a single request; no chunking is performed. The quiz step receives both the beautified transcript and the gems output, with the gems serving as a priority list for at least 3 of the 10 questions.
 
 Each artifact is written as soon as it's produced, so a failed run can be resumed without re-downloading or re-running earlier steps. Audio is discarded when the temp dir is cleaned up unless `--keep-audio` is set, in which case it's copied to the output directory before cleanup.
 

@@ -15,6 +15,7 @@ OUTPUT_FILES = {
     "raw_transcript": "transcript_raw.md",
     "transcript": "transcript.md",
     "summary": "summary.md",
+    "gems": "gems.md",
     "quiz": "quiz.md",
     "audio": "audio.mp3",
 }
