@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "any-video"
 version = "2.0.0"
 description = "CLI tool to download YouTube videos, transcribe with Whisper, and generate learning materials via Claude"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "faster-whisper>=1.0,<2",
     "anthropic>=0.80,<1",
@@ -27,7 +27,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]

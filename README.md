@@ -16,7 +16,7 @@ A YouTube video transcriber that generates AI-powered summaries and quizzes.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - **ffmpeg** (required for audio processing)
 - Anthropic API key (for summary, quiz, and transcript beautification)

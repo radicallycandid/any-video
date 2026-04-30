@@ -6,7 +6,7 @@ CLI tool that downloads YouTube videos, transcribes them locally with Whisper, a
 
 ## Tech stack
 
-- **Python 3.10+** with type hints and dataclasses
+- **Python 3.11+** with type hints and dataclasses
 - **faster-whisper** — local transcription (CTranslate2 backend)
 - **anthropic** — Claude API for beautification, summary, quiz
 - **yt-dlp** — YouTube downloading
@@ -32,7 +32,7 @@ uv run ruff format .
 
 - **Formatter:** Black, 100 char line length
 - **Linter:** Ruff — rules: E, F, W, I, UP, B, C4, SIM (E501 ignored)
-- **Target:** Python 3.10+
+- **Target:** Python 3.11+
 - **Tests:** pytest + pytest-mock
 
 ## Anti-patterns to refuse
