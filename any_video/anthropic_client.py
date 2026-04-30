@@ -142,11 +142,25 @@ Format each question as:
 - C) [option]
 - D) [option]
 
-**Answer: [letter]**
-
 ---
 
-Output only the 10 questions in this format. No preamble, no closing note."""
+After all 10 questions, output an answer key section so the reader can attempt the \
+quiz before checking. Format it exactly as:
+
+# Answers
+
+1. [letter]
+2. [letter]
+3. [letter]
+4. [letter]
+5. [letter]
+6. [letter]
+7. [letter]
+8. [letter]
+9. [letter]
+10. [letter]
+
+Output only the 10 questions followed by the answer key. No preamble, no closing note."""
 
 
 def _call_claude(
