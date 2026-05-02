@@ -1,6 +1,9 @@
 """Anthropic API interactions: beautify, summarize, gems, quiz."""
 
 import logging
+import random
+import re
+from dataclasses import dataclass
 
 import anthropic
 
@@ -133,9 +136,10 @@ The correct answer MUST NOT be the longest of the four. If your draft makes the 
 answer the longest or most detailed, rewrite the distractors to be equally specific, or \
 shorten the correct answer
 - Options share grammatical structure (all noun phrases, or all complete sentences, etc.)
-- The correct answer's position must be roughly evenly distributed across A/B/C/D over \
-the 10 questions — aim for 2–3 correct answers in each position (A, B, C, and D each). \
-Do not cluster on any single letter, and do not avoid any letter
+
+Note: option positions are reshuffled programmatically after generation to enforce a uniform \
+correct-answer distribution, so do not worry about placing correct answers at varied letters \
+yourself — focus on writing genuinely good questions and equally plausible distractors.
 
 Explicitly guard against a well-known LLM failure mode: making the correct answer the \
 longest, most specific, or most sophisticated-sounding of the four while distractors are \
@@ -222,7 +226,110 @@ def generate_gems(transcript: str) -> str:
 
 
 def generate_quiz(transcript: str, gems: str) -> str:
-    """Generate 10 multiple-choice questions, prioritizing the gems."""
+    """Generate 10 multiple-choice questions, prioritizing the gems.
+
+    The model has a strong middle-position bias for correct answers (B/C dominate
+    even with explicit instruction). After generation we re-render with option
+    positions shuffled to a planned uniform distribution.
+    """
     logger.debug("Generating quiz...")
     user_content = f"{transcript}\n\n---\nGEMS:\n\n{gems}"
-    return _call_claude(_QUIZ_SYSTEM_PROMPT, user_content, effort="medium")
+    raw = _call_claude(_QUIZ_SYSTEM_PROMPT, user_content, effort="medium")
+    return _shuffle_quiz(raw)
+
+
+# --- Quiz shuffling: parse → permute correct-answer positions → re-render -----
+
+
+@dataclass
+class _Question:
+    num: int
+    body: str  # e.g. "**Q: text**"
+    options: dict[str, str]  # {"A": "...", "B": "...", "C": "...", "D": "..."}
+
+
+def _parse_questions(md: str) -> list[_Question]:
+    """Parse questions from quiz markdown. Returns empty list on parse failure."""
+    body = md.split("# Answers", 1)[0] if "# Answers" in md else md
+    chunks = re.split(r"^##\s+Question\s+(\d+)\s*\n", body, flags=re.MULTILINE)
+
+    questions: list[_Question] = []
+    for i in range(1, len(chunks), 2):
+        num_str = chunks[i]
+        content = chunks[i + 1]
+        opt_a = re.search(r"^-\s+A\)\s*(.+)$", content, re.MULTILINE)
+        if not opt_a:
+            continue
+        body_text = content[: opt_a.start()].strip()
+        options: dict[str, str] = {}
+        for letter in "ABCD":
+            m = re.search(rf"^-\s+{letter}\)\s*(.+)$", content, re.MULTILINE)
+            if m:
+                options[letter] = m.group(1).strip()
+        if len(options) == 4 and body_text:
+            questions.append(_Question(num=int(num_str), body=body_text, options=options))
+    return questions
+
+
+def _parse_answer_key(md: str) -> list[str]:
+    """Parse the answer key. Returns empty list if no answer section found."""
+    if "# Answers" not in md:
+        return []
+    answers_section = md.split("# Answers", 1)[1]
+    return re.findall(r"^\s*\d+\.\s*([A-D])\s*$", answers_section, re.MULTILINE)
+
+
+def _plan_positions(n: int) -> list[str]:
+    """Return n target letters with each letter appearing as evenly as possible."""
+    letters = ["A", "B", "C", "D"]
+    base, extra = divmod(n, 4)
+    plan = letters * base
+    plan.extend(random.sample(letters, extra))
+    random.shuffle(plan)
+    return plan
+
+
+def _permute_options(
+    options: dict[str, str], correct: str, target: str
+) -> dict[str, str]:
+    """Move the correct option's content to `target` letter; shuffle distractors."""
+    correct_content = options[correct]
+    distractors = [v for k, v in options.items() if k != correct]
+    random.shuffle(distractors)
+    new: dict[str, str] = {}
+    di = iter(distractors)
+    for letter in "ABCD":
+        new[letter] = correct_content if letter == target else next(di)
+    return new
+
+
+def _render_quiz(questions: list[_Question], answer_letters: list[str]) -> str:
+    parts: list[str] = []
+    for q in questions:
+        parts.append(f"## Question {q.num}\n\n")
+        parts.append(f"{q.body}\n\n")
+        for letter in "ABCD":
+            parts.append(f"- {letter}) {q.options[letter]}\n")
+        parts.append("\n---\n\n")
+    parts.append("# Answers\n\n")
+    for i, letter in enumerate(answer_letters, 1):
+        parts.append(f"{i}. {letter}\n")
+    return "".join(parts).rstrip() + "\n"
+
+
+def _shuffle_quiz(raw_quiz: str) -> str:
+    """Permute correct-answer positions to a uniform distribution across A/B/C/D."""
+    questions = _parse_questions(raw_quiz)
+    correct_letters = _parse_answer_key(raw_quiz)
+    if not questions or len(questions) != len(correct_letters):
+        logger.warning("Could not parse quiz output for shuffling; returning unchanged")
+        return raw_quiz
+
+    plan = _plan_positions(len(questions))
+    new_questions: list[_Question] = []
+    new_answers: list[str] = []
+    for q, orig, target in zip(questions, correct_letters, plan, strict=True):
+        new_opts = _permute_options(q.options, orig, target)
+        new_questions.append(_Question(num=q.num, body=q.body, options=new_opts))
+        new_answers.append(target)
+    return _render_quiz(new_questions, new_answers)
