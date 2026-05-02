@@ -126,10 +126,20 @@ say about…", "which of these examples best illustrates…")
 
 For each question, write four options (A–D) where:
 - Exactly one is correct
-- The three distractors are plausible — they should be wrong but reflect real misconceptions or \
-partial understanding, not absurd or off-topic choices
-- Options are roughly the same length and grammatical form
-- The position of the correct answer varies across the 10 questions (do not always put it as A or B)
+- The three distractors are plausible — they reflect real misconceptions or partial \
+understanding, not absurd or off-topic choices
+- All four options are matched in length — aim for the same word count within ±20%. \
+The correct answer MUST NOT be the longest of the four. If your draft makes the correct \
+answer the longest or most detailed, rewrite the distractors to be equally specific, or \
+shorten the correct answer
+- Options share grammatical structure (all noun phrases, or all complete sentences, etc.)
+- The correct answer's position varies across the 10 questions — aim for rough even \
+distribution across A/B/C/D, not clustering on A or B
+
+Explicitly guard against a well-known LLM failure mode: making the correct answer the \
+longest, most specific, or most sophisticated-sounding of the four while distractors are \
+shorter or flatter. A reader who has not seen the video must not be able to identify the \
+correct answer simply by picking the most detailed option.
 
 Format each question as:
 
