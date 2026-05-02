@@ -133,8 +133,9 @@ The correct answer MUST NOT be the longest of the four. If your draft makes the 
 answer the longest or most detailed, rewrite the distractors to be equally specific, or \
 shorten the correct answer
 - Options share grammatical structure (all noun phrases, or all complete sentences, etc.)
-- The correct answer's position varies across the 10 questions — aim for rough even \
-distribution across A/B/C/D, not clustering on A or B
+- The correct answer's position must be roughly evenly distributed across A/B/C/D over \
+the 10 questions — aim for 2–3 correct answers in each position (A, B, C, and D each). \
+Do not cluster on any single letter, and do not avoid any letter
 
 Explicitly guard against a well-known LLM failure mode: making the correct answer the \
 longest, most specific, or most sophisticated-sounding of the four while distractors are \
